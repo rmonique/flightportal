@@ -6,6 +6,7 @@ from adafruit_matrixportal.matrixportal import MatrixPortal
 from adafruit_portalbase.network import HttpError
 import adafruit_requests as requests
 import json
+from json_filter import JsonFilter
 
 import adafruit_display_text.label
 import displayio
@@ -19,8 +20,12 @@ import neopixel
 from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_esp32spi.adafruit_esp32spi_wifimanager import WiFiManager
 
+import microcontroller
 from microcontroller import watchdog as w
 from watchdog import WatchDogMode
+
+# Log why we (re)started - tells us if the watchdog fired, power dropped, etc.
+print("Boot. Reset reason:", microcontroller.cpu.reset_reason)
 
 w.timeout=16 # timeout in seconds
 w.mode = WatchDogMode.RESET
@@ -34,6 +39,12 @@ if not WIFI_SSID or not WIFI_PASSWORD:
 
 # How often to query fr24 - quick enough to catch a plane flying over, not so often as to cause any issues, hopefully
 QUERY_DELAY=30
+# After failed searches, wait QUERY_DELAY * 2^errors seconds (capped) before trying again
+MAX_BACKOFF=600
+# Longest Retry-After from the server we'll honour
+MAX_RETRY_AFTER=1800
+# How many times to try loading details for the same flight before giving up on it
+MAX_DETAIL_ATTEMPTS=3
 #Area to search for flights, see settings.toml
 BOUNDS_BOX=os.getenv("BOUNDS_BOX")
 if not BOUNDS_BOX:
@@ -91,9 +102,27 @@ matrixportal = MatrixPortal(
     debug=False
 )
 
-# Some memory shenanigans - the matrixportal doesn't do great at assigning big strings dynamically. So we create a big static array to put the JSON results in each time.
-json_size=9500
+# Some memory shenanigans - the matrixportal doesn't do great at assigning big strings dynamically.
+# So we create one static array at startup and reuse it for every flight. The details response is
+# filtered as it streams in (see json_filter.py) so only the fields below are kept - a few hundred bytes.
+json_size=2048
 json_bytes=bytearray(json_size)
+json_len=0  # bytes of valid JSON currently in json_bytes
+
+# Fields of the FR24 details JSON we keep. Add a dotted path here to use another field in parse_details_json().
+# (Arrays like "trail" can only be kept whole, which is too big - so altitude/speed aren't available.)
+DETAIL_FIELDS = (
+    "identification.number.default",
+    "identification.callsign",
+    "aircraft.model.code",
+    "aircraft.model.text",
+    "airline.name",
+    "airport.origin.name",
+    "airport.origin.code.iata",
+    "airport.destination.name",
+    "airport.destination.code.iata",
+)
+details_filter=JsonFilter(json_bytes, DETAIL_FIELDS, stop_key="trail")
 gc.collect()  # Clear memory after initial allocation
 
 # Helper: sleep while periodically feeding the watchdog so long sleeps
@@ -232,71 +261,40 @@ def clear_flight():
 # Take the flight ID we found with a search, and load details about it
 def get_flight_details(fn):
 
-    # the JSON from FR24 is too big for the matrixportal memory to handle. So we load it in chunks into our static array,
-    # as far as the big "trails" section of waypoints at the end of it, then ignore most of that part. Should be about 9KB, we have 9.5K before we run out of room..
-    global json_bytes
-    global json_size
-    
+    # The JSON from FR24 is too big for the matrixportal memory to handle. So we stream it in chunks
+    # through details_filter, which keeps only DETAIL_FIELDS in our static array and stops at the
+    # huge "trail" section near the end.
+    global json_len
+
     # Clear memory before fetching to avoid fragmentation issues
     w.feed()
     gc.collect()
-    
+
+    json_len=0
     byte_counter=0
     chunk_length=256  # Reduced from 512 to use less peak memory during transfer
-    # Clear the json_bytes array to ensure no stale data from previous flights
-    for i in range(json_size):
-        json_bytes[i] = 0
-    gc.collect()  # Clear memory before fetching
+    details_filter.reset()
 
     # Get the URL response one chunk at a time
     response = None
     try:
         response = wifi.get(url=FLIGHT_LONG_DETAILS_HEAD+fn, headers=rheaders)
-        try:
-            print("Detail fetch status:", response.status_code)
-        except Exception:
-            pass
-        try:
-            content_type = response.headers.get("Content-Type")
-            if content_type:
-                print("Detail content type:", content_type)
-        except Exception:
-            pass
+        print("Detail fetch status:", response.status_code)
+        if response.status_code != 200:
+            print_body_preview(response)
+            return False
         for chunk in response.iter_content(chunk_size=chunk_length):
-
-            # if the chunk will fit in the byte array, add it
-            if(byte_counter+chunk_length<=json_size):
-                for i in range(0,len(chunk)):
-                    json_bytes[i+byte_counter]=chunk[i]
-            else:
-                print("Exceeded max string size while parsing JSON")
-                return False
-
-            # check if this chunk contains the "trail:" tag which is the last bit we care about
-            trail_start=json_bytes.find((b"\"trail\":"))
+            w.feed()
             byte_counter+=len(chunk)
-
-            # if it does, find the first/most recent of the many trail entries, giving us things like speed and heading
-            if not trail_start==-1:
-                # work out the location of the first } character after the "trail:" tag, giving us the first entry
-                trail_end=json_bytes[trail_start:].find((b"}"))
-                if not trail_end==-1:
-                    trail_end+=trail_start
-                    # characters to add to make the whole JSON object valid, since we're cutting off the end
-                    closing_bytes=b'}]}'
-                    for i in range (0,len(closing_bytes)):
-                        json_bytes[trail_end+i]=closing_bytes[i]
-                    # zero out the rest
-                    for i in range(trail_end+3,json_size):
-                        json_bytes[i]=0
-                    # print(json_bytes.decode('utf-8'))
-
-                    # Stop reading chunks
-                    print("Details lookup saved "+str(trail_end)+" bytes.")
-                    w.feed()
-                    gc.collect()  # Free memory before returning
-                    return True
-    # Handle occasional URL fetching errors            
+            details_filter.feed(chunk)
+            if details_filter.error:
+                print("Details filter error: "+details_filter.error+" after "+str(byte_counter)+" bytes")
+                break
+            if details_filter.done:
+                json_len=details_filter.length
+                print("Details lookup read "+str(byte_counter)+" bytes, kept "+str(json_len)+".")
+                return True
+    # Handle occasional URL fetching errors
     except (RuntimeError, OSError, HttpError, TimeoutError, MemoryError) as e:
             print("Error--------------------------------------------------")
             print(e)
@@ -310,12 +308,11 @@ def get_flight_details(fn):
         w.feed()
         gc.collect()  # Ensure memory is cleaned up
 
-    #If we got here we got through all the JSON without finding the right trail entries
-    print("Failed to find a valid trail entry in JSON")
+    # If we got here the response ended (or the filter errored) before we had a complete object
+    if not details_filter.error:
+        print("Details response ended early after "+str(byte_counter)+" bytes")
     try:
-        preview = json_bytes[:180].decode("utf-8", "replace")
-        print("Detail response preview:")
-        print(preview)
+        print("Kept so far:", bytes(json_bytes[:min(details_filter.length, 180)]).decode("utf-8", "replace"))
     except Exception:
         pass
     return False
@@ -324,12 +321,10 @@ def get_flight_details(fn):
 # Look at the byte array that fetch_details saved into and extract any fields we want
 def parse_details_json():
 
-    global json_bytes
-
     try:
-        # get the JSON from the bytes
+        # get the JSON from the bytes (only the json_len bytes the filter wrote are valid)
         gc.collect()
-        long_json=json.loads(json_bytes)
+        long_json=json.loads(bytes(json_bytes[:json_len]))
 
         # Some available values from the JSON. Put the details URL and a flight ID in your browser and have a look for more.
 
@@ -458,31 +453,74 @@ def checkConnection():
         print(e.__class__.__name__+": "+str(e))
 
 
-# Look for flights overhead
+# Print the start of a response body, small enough not to blow memory.
+# Useful to spot a Cloudflare/HTML block page instead of JSON.
+def print_body_preview(response, max_bytes=160):
+    try:
+        for chunk in response.iter_content(chunk_size=max_bytes):
+            print("Body preview:", bytes(chunk).decode("utf-8", "replace"))
+            break
+    except Exception as e:
+        print("Could not read body:", e)
+
+# Read a header case-insensitively, return None if missing
+def get_header(response, name):
+    try:
+        name = name.lower()
+        for key, value in response.headers.items():
+            if key.lower() == name:
+                return value
+    except Exception:
+        pass
+    return None
+
+# Set by get_flights when the server sends Retry-After
+retry_after = 0
+
+# Look for flights overhead.
+# Returns a flight ID, False if no flight is overhead, or None if the search failed.
 def get_flights():
-    matrixportal.url=FLIGHT_SEARCH_URL
+    global retry_after
+    retry_after = 0
     response = None
     try:
-        #response = json.loads(matrixportal.fetch())
         response = wifi.get(url=FLIGHT_SEARCH_URL, headers=rheaders)
-        data = response.json()
-    except (RuntimeError, OSError, HttpError, ValueError, requests.OutOfRetries, TimeoutError) as e:
+        status = response.status_code
+        if status != 200:
+            print("Search HTTP status:", status)
+            ra = get_header(response, "Retry-After")
+            if ra:
+                print("Retry-After:", ra)
+                try:
+                    retry_after = int(ra)
+                except ValueError:
+                    pass
+            print_body_preview(response)
+            return None
+        try:
+            data = response.json()
+        except ValueError as e:
+            # 200 but not JSON - most likely an HTML challenge/block page
+            print("Search returned non-JSON (possible block page):", e)
+            return None
+    except (RuntimeError, OSError, HttpError, requests.OutOfRetries, TimeoutError) as e:
+        # Network-level failure - worth checking the WiFi
         print(e.__class__.__name__+"--------------------------------------")
         print(e)
         checkConnection()
-        return False
+        return None
     finally:
         if response is not None:
             response.close()
+
     if len(data)==3:
-        #print ("Flight found.")
         for flight_id, flight_info in data.items():
             # the JSON has three main fields, we want the one that's a flight ID
             if not (flight_id=="version" or flight_id=="full_count"):
                 if len(flight_info)>13:
                     return flight_id
-    else:
-        return False
+    print("Search 200, no flight. mem_free:", gc.mem_free())
+    return False
 
 
 
@@ -491,18 +529,30 @@ def get_flights():
 checkConnection()
 
 last_flight=''
+failed_flight=''
+failed_attempts=0
+consecutive_errors=0
 while True:
 
-    #checkConnection()
-
     w.feed()
 
-    #print("memory free: " + str(gc.mem_free()))
-
-    #print("Get flights...")
     flight_id=get_flights()
     w.feed()
-    
+
+    # Search failed - back off rather than hammering the server
+    if flight_id is None:
+        consecutive_errors+=1
+        delay=min(QUERY_DELAY*(2**consecutive_errors), MAX_BACKOFF)
+        if retry_after>delay:
+            delay=min(retry_after, MAX_RETRY_AFTER)
+        print("Search failed ("+str(consecutive_errors)+" in a row), waiting "+str(delay)+"s")
+        gc.collect()
+        feed_sleep(delay, step_seconds=5)
+        continue
+    if consecutive_errors:
+        print("Search recovered after "+str(consecutive_errors)+" failed attempt(s)")
+        consecutive_errors=0
+
 
     if flight_id:
         if flight_id==last_flight:
@@ -512,6 +562,7 @@ while True:
             clear_flight()
             w.feed()
             gc.collect()  # Clear before fetching
+            shown=False
             if get_flight_details(flight_id):
                 w.feed()
                 gc.collect()  # Clear after fetching
@@ -520,6 +571,7 @@ while True:
                     gc.collect()  # Clear after parsing
                     plane_animation()
                     display_flight()
+                    shown=True
                     # Clear any remaining objects from display
                     w.feed()
                     gc.collect()
@@ -529,8 +581,24 @@ while True:
             else:
                 print("error loading details, skip displaying this flight")
                 gc.collect()
-            
-            last_flight=flight_id
+
+            if shown:
+                last_flight=flight_id
+                failed_flight=''
+                failed_attempts=0
+            else:
+                # Retry this flight on the next search, but give up after a few tries
+                # so a flight that always fails doesn't cause a details request every loop
+                if flight_id==failed_flight:
+                    failed_attempts+=1
+                else:
+                    failed_flight=flight_id
+                    failed_attempts=1
+                if failed_attempts>=MAX_DETAIL_ATTEMPTS:
+                    print("Giving up on flight "+flight_id+" after "+str(failed_attempts)+" attempts")
+                    last_flight=flight_id
+                else:
+                    print("Will retry flight "+flight_id+" (attempt "+str(failed_attempts)+" of "+str(MAX_DETAIL_ATTEMPTS)+")")
             # Final cleanup after processing this flight
             w.feed()
             gc.collect()
