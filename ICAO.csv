@@ -1,0 +1,68 @@
+Code,Manufacturer,Model
+A319,Airbus,A319
+A320,Airbus,A320
+A321,Airbus,A321
+A333,Airbus,A330-300
+A359,Airbus,A350-900
+B737,Boeing,737-700
+B738,Boeing,737-800
+B739,Boeing,737-900
+B752,Boeing,757-200
+B763,Boeing,767-300
+B77L,Boeing,777-200LR
+B77W,Boeing,777-300ER
+B788,Boeing,787-8 Dreamliner
+B789,Boeing,787-9 Dreamliner
+B78X,Boeing,787-10 Dreamliner
+CRJ2,Bombardier,CRJ-200
+CRJ7,Bombardier,CRJ-700
+CRJ9,Bombardier,CRJ-900
+E170,Embraer,170
+E190,Embraer,190
+E75L,Embraer,175A380,Airbus,A380-800
+A220,Airbus,A220-300
+A400M,Airbus,A400M
+B747,Boeing,747-400
+B717,Boeing,717-200
+B757,Boeing,757-200
+B767,Boeing,767-200
+Q400,Bombardier,Q400
+Q300,Bombardier,Q300
+BA11,Airbus,AS350 Helicopter
+C208,Cessna,Caravan
+C402,Cessna,402
+C550,Cessna,Citation II
+C551,Cessna,Citation II/SP
+C560,Cessna,Citation V
+C650,Cessna,Citation VI
+C680,Cessna,Citation X
+C700,Cessna,Citation X+
+P28A,Piper,Cherokee
+P32T,Piper,Seneca
+E50P,Beechcraft,King Air 90
+E90,Beechcraft,King Air 350
+GLF4,Gulfstream,G450
+GLF5,Gulfstream,G550
+GLEX,Gulfstream,G650
+H25B,Hawker,800XP
+L15,Learjet,60
+LJ45,Learjet,45
+M20P,Mooney,M20P
+P46T,Piper,Malibu Mirage
+PA44,Piper,Seneca PA44
+R66,Robinson,R66 Helicopter
+F2TH,Fokker,100
+IA63,IAI,Westwind
+BE20,Beechcraft,King Air 200
+SR20,Cirrus,SR20
+SR22,Cirrus,SR22
+DA62,Diamond,DA62
+PC12,Pilatus,PC-12
+SF50,Cirrus,SF50 Vision Jet
+ATR42,ATR,ATR 42
+ATR72,ATR,ATR 72
+E145,Embraer,E145
+SF34,Saab,340
+DH6,de Havilland,Twin Otter
+A343,Airbus,A340-300
+A345,Airbus,A340-500

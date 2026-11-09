@@ -3,9 +3,13 @@
 CIRCUITPY_WIFI_SSID = "wifi network"
 CIRCUITPY_WIFI_PASSWORD = "wifi password"
 
-# area to search for flights: top latitude, bottom latitude, left longitude, right longitude
-# (so this example is central London)
-bounds_box = "51.6,51.4,-0.3,-0.1"
+# Area to search for flights: top latitude, bottom latitude, left longitude, right longitude
+# (so this example is central London). Keep it small - roughly what you can see from your window.
+BOUNDS_BOX = "51.6,51.4,-0.3,-0.1"
 
-# "True" or "False" to enable or disable status LED
-status_leds = "True"
+# Optional: ignore flights above this altitude in feet, e.g. 15000. 0 = show any altitude.
+# When several flights are in the box, the lowest one is shown.
+MAX_ALTITUDE = 0
+
+# Optional: "True" or "False" to enable or disable the status LED
+STATUS_LEDS = "True"

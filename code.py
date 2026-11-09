@@ -2,16 +2,13 @@ import time
 import os
 import board
 import terminalio
-from adafruit_matrixportal.matrixportal import MatrixPortal
-from adafruit_portalbase.network import HttpError
+from adafruit_matrixportal.matrix import Matrix
 import adafruit_requests as requests
 import json
 from json_filter import JsonFilter
 
 import adafruit_display_text.label
 import displayio
-import framebufferio
-import rgbmatrix
 import gc
 
 import busio
@@ -32,10 +29,32 @@ w.mode = WatchDogMode.RESET
 
 FONT=terminalio.FONT
 
+# settings.toml only supports strings and integers, so accept "True"/"False" or 1/0
+def setting_bool(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+def setting_int(name, default):
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        print("Ignoring invalid "+name+" in settings.toml:", value)
+        return default
+
 WIFI_SSID = os.getenv("CIRCUITPY_WIFI_SSID")
 WIFI_PASSWORD = os.getenv("CIRCUITPY_WIFI_PASSWORD")
 if not WIFI_SSID or not WIFI_PASSWORD:
     raise ValueError("Missing CIRCUITPY_WIFI_SSID or CIRCUITPY_WIFI_PASSWORD in settings.toml")
+
+# Show WiFi/request status on the board's status LED
+STATUS_LEDS=setting_bool("STATUS_LEDS", True)
+# Ignore flights above this altitude in feet (0 = no limit). Handy to skip high overflights you can't see.
+MAX_ALTITUDE=setting_int("MAX_ALTITUDE", 0)
 
 # How often to query fr24 - quick enough to catch a plane flying over, not so often as to cause any issues, hopefully
 QUERY_DELAY=30
@@ -45,6 +64,14 @@ MAX_BACKOFF=600
 MAX_RETRY_AFTER=1800
 # How many times to try loading details for the same flight before giving up on it
 MAX_DETAIL_ATTEMPTS=3
+# Seconds to wait on a network request before giving up. Must stay well under the
+# 16s watchdog, or a slow server reboots the board instead of logging an error.
+REQUEST_TIMEOUT=10
+# How many flights to ask for per search; we show the lowest one
+SEARCH_LIMIT=5
+# Seconds to let the ESP32 WiFi chip boot after a reset before connecting.
+# (3s didn't stop the first connect failing on ESP32 firmware 1.2.2 - updating the firmware is the likely fix)
+ESP_RESET_WAIT=1
 #Area to search for flights, see settings.toml
 BOUNDS_BOX=os.getenv("BOUNDS_BOX")
 if not BOUNDS_BOX:
@@ -64,7 +91,7 @@ TEXT_SPEED=0.04
 
 #URLs
 FLIGHT_SEARCH_HEAD="https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds="
-FLIGHT_SEARCH_TAIL="&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=0&maxage=14400&gliders=0&stats=0&ems=1&limit=1"
+FLIGHT_SEARCH_TAIL="&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=0&maxage=14400&gliders=0&stats=0&ems=1&limit="+str(SEARCH_LIMIT)
 FLIGHT_SEARCH_URL=FLIGHT_SEARCH_HEAD+BOUNDS_BOX+FLIGHT_SEARCH_TAIL
 # Deprecated URL used to return less JSON than the long details URL, but can give ambiguous results
 # FLIGHT_DETAILS_HEAD="https://api.flightradar24.com/common/v1/flight/list.json?&fetchBy=flight&page=1&limit=1&maxage=14400&query="
@@ -91,18 +118,23 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 status_light = neopixel.NeoPixel(
     board.NEOPIXEL, 1, brightness=0.2
 )
-wifi = WiFiManager(esp, WIFI_SSID, WIFI_PASSWORD, status_pixel=status_light)
+if not STATUS_LEDS:
+    status_light.fill(0)
+wifi = WiFiManager(esp, WIFI_SSID, WIFI_PASSWORD, status_pixel=status_light if STATUS_LEDS else None)
+try:
+    fw = esp.firmware_version  # str in newer adafruit_esp32spi, bytes in older
+    if not isinstance(fw, str):
+        fw = str(fw, "utf-8")
+    print("ESP32 firmware:", fw.strip("\x00"))
+except Exception as e:
+    print("Could not read ESP32 firmware version:", e)
 
 
-# Top level matrixportal object
-matrixportal = MatrixPortal(
-    headers=rheaders,
-    esp=esp,
-    rotation=0,
-    debug=False
-)
+# The LED matrix display. We only need the display, so use Matrix rather than the full
+# MatrixPortal helper, which also sets up its own network stack and Adafruit IO client (costs RAM).
+display = Matrix(width=64, height=32, bit_depth=2, rotation=0).display
 
-# Some memory shenanigans - the matrixportal doesn't do great at assigning big strings dynamically.
+# Some memory shenanigans - the board doesn't do great at assigning big strings dynamically.
 # So we create one static array at startup and reuse it for every flight. The details response is
 # filtered as it streams in (see json_filter.py) so only the fields below are kept - a few hundred bytes.
 json_size=2048
@@ -163,7 +195,7 @@ planeBmp[1,5]=planeBmp[2,5]=planeBmp[3,5]=planeBmp[4,5]=planeBmp[5,5]=planeBmp[6
 planeBmp[9,6]=planeBmp[5,6]=planeBmp[4,6]=planeBmp[3,6]=1
 planeBmp[6,9]=planeBmp[6,8]=planeBmp[5,8]=planeBmp[4,7]=planeBmp[5,7]=planeBmp[6,7]=1
 planeTg= displayio.TileGrid(planeBmp, pixel_shader=planePalette)
-planeG=displayio.Group(x=matrixportal.display.width+12,y=10)
+planeG=displayio.Group(x=display.width+12,y=10)
 planeG.append(planeTg)
 
 # We can fit three rows of text on a panel, so one label for each. We'll change their text as needed
@@ -201,52 +233,50 @@ g = displayio.Group()
 g.append(label1)
 g.append(label2)
 g.append(label3)
-matrixportal.display.root_group = g
+display.root_group = g
 
 # Scroll the plane bitmap right to left (same direction as scrolling text)
 def plane_animation():
-    matrixportal.display.root_group = planeG
-    for i in range(matrixportal.display.width+24,-12,-1):
+    display.root_group = planeG
+    for i in range(display.width+24,-12,-1):
             planeG.x=i
             w.feed()
             feed_sleep(PLANE_SPEED, step_seconds=PLANE_SPEED)
-            #matrixportal.display.refresh(minimum_frames_per_second=0)
 
 # Scroll a label, start at the right edge of the screen and go left one pixel at a time
 # Until the right edge of the label reaches the left edge of the screen
 def scroll(line):
-    line.x=matrixportal.display.width
-    for i in range(matrixportal.display.width+1,0-line.bounding_box[2],-1):
+    line.x=display.width
+    for i in range(display.width+1,0-line.bounding_box[2],-1):
         line.x=i
         w.feed()
         feed_sleep(TEXT_SPEED, step_seconds=TEXT_SPEED)
-        #matrixportal.display.refresh(minimum_frames_per_second=0)
         
 
 # Populate the labels, then scroll longer versions of the text
 def display_flight():
 
-    matrixportal.display.root_group = g
+    display.root_group = g
     label1.text=label1_short
     label2.text=label2_short
     label3.text=label3_short
     feed_sleep(PAUSE_BETWEEN_LABEL_SCROLLING, step_seconds=0.5)
     
-    label1.x=matrixportal.display.width+1
+    label1.x=display.width+1
     label1.text=label1_long
     scroll(label1)
     label1.text=label1_short
     label1.x=1
     feed_sleep(PAUSE_BETWEEN_LABEL_SCROLLING, step_seconds=0.5)
     
-    label2.x=matrixportal.display.width+1
+    label2.x=display.width+1
     label2.text=label2_long
     scroll(label2)
     label2.text=label2_short
     label2.x=1
     feed_sleep(PAUSE_BETWEEN_LABEL_SCROLLING, step_seconds=0.5)
     
-    label3.x=matrixportal.display.width+1
+    label3.x=display.width+1
     label3.text=label3_long
     scroll(label3)
     label3.text=label3_short
@@ -261,7 +291,7 @@ def clear_flight():
 # Take the flight ID we found with a search, and load details about it
 def get_flight_details(fn):
 
-    # The JSON from FR24 is too big for the matrixportal memory to handle. So we stream it in chunks
+    # The JSON from FR24 is too big for the board's memory to handle. So we stream it in chunks
     # through details_filter, which keeps only DETAIL_FIELDS in our static array and stops at the
     # huge "trail" section near the end.
     global json_len
@@ -278,7 +308,7 @@ def get_flight_details(fn):
     # Get the URL response one chunk at a time
     response = None
     try:
-        response = wifi.get(url=FLIGHT_LONG_DETAILS_HEAD+fn, headers=rheaders)
+        response = wifi.get(url=FLIGHT_LONG_DETAILS_HEAD+fn, headers=rheaders, timeout=REQUEST_TIMEOUT)
         print("Detail fetch status:", response.status_code)
         if response.status_code != 200:
             print_body_preview(response)
@@ -295,7 +325,7 @@ def get_flight_details(fn):
                 print("Details lookup read "+str(byte_counter)+" bytes, kept "+str(json_len)+".")
                 return True
     # Handle occasional URL fetching errors
-    except (RuntimeError, OSError, HttpError, TimeoutError, MemoryError) as e:
+    except (RuntimeError, OSError, TimeoutError, MemoryError) as e:
             print("Error--------------------------------------------------")
             print(e)
             w.feed()
@@ -318,6 +348,25 @@ def get_flight_details(fn):
     return False
     
 
+# Look up an aircraft type code (e.g. "B738") in ICAO.csv and return "Manufacturer Model",
+# or None if the file or code isn't there. Reads the file each time rather than keeping it in memory.
+AIRCRAFT_FILE="/ICAO.csv"
+def friendly_aircraft_name(code):
+    if not code:
+        return None
+    prefix=code+","
+    try:
+        with open(AIRCRAFT_FILE, "r") as f:
+            for line in f:
+                if line.startswith(prefix):
+                    parts=line.strip().split(",")
+                    if len(parts)>=3:
+                        return parts[1]+" "+parts[2]
+                    return None
+    except OSError:
+        pass
+    return None
+
 # Look at the byte array that fetch_details saved into and extract any fields we want
 def parse_details_json():
 
@@ -326,7 +375,8 @@ def parse_details_json():
         gc.collect()
         long_json=json.loads(bytes(json_bytes[:json_len]))
 
-        # Some available values from the JSON. Put the details URL and a flight ID in your browser and have a look for more.
+        # Only fields listed in DETAIL_FIELDS are kept, so add a field's path there before reading it here.
+        # Put the details URL and a flight ID in your browser to see what else is available.
 
         flight_number=safe_get(long_json, "identification", "number", "default")
         flight_callsign=safe_get(long_json, "identification", "callsign")
@@ -343,20 +393,8 @@ def parse_details_json():
         if airport_destination_name:
             airport_destination_name=airport_destination_name.replace(" Airport","")
         airport_destination_code=safe_get(long_json, "airport", "destination", "code", "iata")
-        #airport_destination_country=long_json["airport"]["destination"]["position"]["country"]["name"]
-        #airport_destination_country_code=long_json["airport"]["destination"]["position"]["country"]["code"]
-        #airport_destination_city=long_json["airport"]["destination"]["position"]["region"]["city"]
-        #airport_destination_terminal=long_json["airport"]["destination"]["info"]["terminal"]
-        #time_scheduled_departure=long_json["time"]["scheduled"]["departure"]
-        #time_real_departure=long_json["time"]["real"]["departure"]
-        #time_scheduled_arrival=long_json["time"]["scheduled"]["arrival"]
-        #time_estimated_arrival=long_json["time"]["estimated"]["arrival"]
-        #latitude=long_json["trail"][0]["lat"]
-        #longitude=long_json["trail"][0]["lng"]
-        #altitude=long_json["trail"][0]["alt"]
-        #speed=long_json["trail"][0]["spd"]
-        #heading=long_json["trail"][0]["hd"]
-
+        # Other fields you could add to DETAIL_FIELDS, e.g. airport.destination.position.region.city,
+        # airport.destination.info.terminal, time.scheduled.departure, time.estimated.arrival
 
         if flight_number:
             print("Flight is called "+flight_number)
@@ -376,7 +414,8 @@ def parse_details_json():
         global label3_short
         global label3_long
 
-        label1_short=safe_text(flight_number)
+        # Fall back to the callsign for flights without a number (private, cargo, etc.)
+        label1_short=safe_text(flight_number or flight_callsign)
         label1_long=safe_text(airline_name)
         origin_code=safe_text(airport_origin_code)
         destination_code=safe_text(airport_destination_code)
@@ -385,13 +424,11 @@ def parse_details_json():
         label2_short=(origin_code+"-"+destination_code) if (origin_code or destination_code) else ""
         label2_long=(origin_name+"-"+destination_name) if (origin_name or destination_name) else ""
         label3_short=safe_text(aircraft_code)
-        label3_long=safe_text(aircraft_model)
+        # Prefer the friendly name from ICAO.csv (e.g. "Boeing 737-800" rather than FR24's "Boeing 737-8H4(WL)")
+        label3_long=friendly_aircraft_name(aircraft_code) or safe_text(aircraft_model)
 
-
-        # optional filter example - check things and return false if you want
-
-        # if altitude > 10000:
-        #    print("Altitude Filter matched so don't display anything")
+        # optional filter example - check things and return False to skip displaying this flight
+        # if airline_name == "Some Airline":
         #    return False
 
     except (KeyError, ValueError,TypeError) as e:
@@ -430,7 +467,7 @@ def checkConnection():
         print("Reset ESP...")
         w.feed()
         wifi.reset()
-        feed_sleep(1)  # Wait after reset
+        feed_sleep(ESP_RESET_WAIT)  # Let the ESP32 finish booting, or the first connect tends to fail
         print("Attempt WiFi connect...")
         w.feed()
         try:
@@ -484,7 +521,7 @@ def get_flights():
     retry_after = 0
     response = None
     try:
-        response = wifi.get(url=FLIGHT_SEARCH_URL, headers=rheaders)
+        response = wifi.get(url=FLIGHT_SEARCH_URL, headers=rheaders, timeout=REQUEST_TIMEOUT)
         status = response.status_code
         if status != 200:
             print("Search HTTP status:", status)
@@ -503,7 +540,7 @@ def get_flights():
             # 200 but not JSON - most likely an HTML challenge/block page
             print("Search returned non-JSON (possible block page):", e)
             return None
-    except (RuntimeError, OSError, HttpError, requests.OutOfRetries, TimeoutError) as e:
+    except (RuntimeError, OSError, requests.OutOfRetries, TimeoutError) as e:
         # Network-level failure - worth checking the WiFi
         print(e.__class__.__name__+"--------------------------------------")
         print(e)
@@ -513,13 +550,33 @@ def get_flights():
         if response is not None:
             response.close()
 
-    if len(data)==3:
-        for flight_id, flight_info in data.items():
-            # the JSON has three main fields, we want the one that's a flight ID
-            if not (flight_id=="version" or flight_id=="full_count"):
-                if len(flight_info)>13:
-                    return flight_id
-    print("Search 200, no flight. mem_free:", gc.mem_free())
+    # Besides "version" and "full_count", each key is a flight ID mapped to a list:
+    # [icao24, lat, lon, heading, altitude_ft, speed_kt, squawk, radar, type, reg, time, origin, dest, flight, ...]
+    # Pick the lowest flight (most likely the one you can see), skipping any above MAX_ALTITUDE.
+    best_id=None
+    best_alt=None
+    count=0
+    skipped=0
+    for flight_id, flight_info in data.items():
+        if not isinstance(flight_info, list) or len(flight_info)<=13:
+            continue
+        count+=1
+        alt=flight_info[4] if isinstance(flight_info[4], int) else 0
+        if MAX_ALTITUDE and alt>MAX_ALTITUDE:
+            skipped+=1
+            continue
+        if best_alt is None or alt<best_alt:
+            best_id=flight_id
+            best_alt=alt
+    del data
+    if best_id:
+        if count>1:
+            print("Search 200: "+str(count)+" flights, lowest is "+best_id+" at "+str(best_alt)+"ft")
+        return best_id
+    if skipped:
+        print("Search 200, "+str(skipped)+" flight(s) above MAX_ALTITUDE. mem_free:", gc.mem_free())
+    else:
+        print("Search 200, no flight. mem_free:", gc.mem_free())
     return False
 
 

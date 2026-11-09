@@ -5,41 +5,64 @@ Project for displaying the details of planes overhead on an Adafruit MatrixPorta
 
 https://user-images.githubusercontent.com/103124527/206902629-1f31bd41-d8a8-415e-a35a-625efb20b3d6.MOV
 
-Uses an Adafruit MatrixPortal and a 64x32 LED/RGB Matrix (P4), and some fairly hacked-together FlightRadar24 API-style scraping to display the details of flights passing overhead. That code being unoffical, it may break at any time!
+Uses an Adafruit MatrixPortal M4 and a 64x32 LED/RGB Matrix (P4), and some fairly hacked-together FlightRadar24 API-style scraping to display the details of flights passing overhead. That code being unofficial, it may break at any time!
 
-To make one you will need:
+## Hardware
 
-1. A MatrixPortal (https://www.adafruit.com/product/4745)
+1. A MatrixPortal M4 (https://www.adafruit.com/product/4745)
 2. A P4, 64x32 RGB matrix panel (I get mine from Aliexpress)
 3. The case I designed (https://www.thingiverse.com/thing:5701517)
 4. An adafruit acrylic diffuser (https://www.adafruit.com/product/4749) - available various places
-5. 6 M3 screws (sorry, said M5 before but was looking at the wrong ones, my bad. Think mine are 8mm long, little bit more would be OK, shorter probably a problem)
+5. 6 M3 screws (about 8mm long, a little longer is OK, shorter is probably a problem)
 6. Optional: Uglu dashes to stick the diffuser on, the case holds mine on pretty well though (https://www.protapes.com/products/uglu-600-dashes-sheets)
-
-Prep the portal as detailed here (https://learn.adafruit.com/adafruit-matrixportal-m4/prep-the-matrixportal), put the code and secrets files on, put your wifi details and the geo box you want to search in the secrets file, and you should be good to go!
-
-If you'd like to change the layout, colours or the flight info displayed, all that is pretty configurable, have a look at code.py. Hopefully the comments are fairly self explanatory if you're happy hacking around with python.
-
-The libaries it needs are I think all part of the recommended prep above, but for info they are:
-
-- adafruit_fakerequests
-- adafruit_requests
-- adafruit_bitmap_font
-- adafruit_io
-- adafruit_matrixportal
-- adafruit_minimqtt
-- adafruit_display_text
-- adafruit_portalbase
 
 For power, the easiest thing is to use the cable that came with your matrix panel, as long as it has two prongs that go to the screws on the matrixportal. All that's needed is for the portal to connect to the power port on the panel - we're not using much power here (I clock it at about 2w). Any decent usb power supply connected to the portal should do it.
 
 ![IMG-2179](https://user-images.githubusercontent.com/103124527/208709167-dd4b6ff2-4c80-4e38-840f-e5b958e2ed78.jpg)
 
-I soldered a connection straight onto the panel's power port as below, for neatness, but that's completely optional. 
+I soldered a connection straight onto the panel's power port as below, for neatness, but that's completely optional.
 
 ![IMG_2125](https://user-images.githubusercontent.com/103124527/206903066-7af5c076-101e-4598-b3ba-0f64766e4162.jpg)
 ![IMG_2126_small](https://user-images.githubusercontent.com/103124527/206903084-42378ce0-b8d8-4810-a18a-f35b9a509752.jpg)
 ![IMG_2127_small](https://user-images.githubusercontent.com/103124527/206903089-16d0f7f7-2dc0-4082-a012-0e1c9999a63a.jpg)
 ![IMG_2128_small](https://user-images.githubusercontent.com/103124527/206903092-0a131b80-cd20-4c8c-b892-9b0a5c1d544b.jpg)
 
-For debugging, use putty or similar, see what COM port the portal is on (device manager in windows will show you), and run a serial connection to that port at 115200. It should print out helpful messages about errors, flights it sees, etc. You can also paste the URLs you see in the code into a browser and check you can find flights, etc.
+## Setup
+
+1. Install CircuitPython on the MatrixPortal as described in https://learn.adafruit.com/adafruit-matrixportal-m4/install-circuitpython. It shows up as a `CIRCUITPY` drive when plugged in over USB.
+2. Copy `code.py`, `json_filter.py`, `ICAO.csv` and `settings.toml` to the `CIRCUITPY` drive.
+3. Edit `settings.toml` on the drive: add your WiFi name and password, and set `BOUNDS_BOX` to the area you want to watch (top latitude, bottom latitude, left longitude, right longitude). `MAX_ALTITUDE` and `STATUS_LEDS` are optional.
+4. Install the libraries. The easiest way is [circup](https://github.com/adafruit/circup), which reads the imports and installs what's needed:
+
+   ```
+   pip install circup        # or: uvx circup ...
+   circup install --auto
+   circup update --all       # later, to keep libraries current
+   ```
+
+   The libraries used are adafruit_matrixportal, adafruit_esp32spi, adafruit_requests, adafruit_display_text, adafruit_bitmap_font and neopixel, plus their dependencies.
+
+The board restarts and runs the new code whenever you save a file to the drive.
+
+## Customising
+
+Layout, colours, speeds and which flight details are shown are configurable near the top of `code.py`. To show another field from FlightRadar24, add its path to `DETAIL_FIELDS` (only those fields are kept, to save memory) and read it in `parse_details_json()`.
+
+`ICAO.csv` maps aircraft type codes to friendly names for the third row (e.g. `B738` shows as "Boeing 737-800"). Add a line for any type you see that isn't listed; unlisted types fall back to FlightRadar24's model name.
+
+## Debugging
+
+The board prints what it's doing over USB serial at 115200 baud: each search result, flight lookups, errors and why it last restarted.
+
+- **Mac:** `screen /dev/cu.usbmodem* 115200` (exit with Ctrl+A then K), or the serial console in Mu.
+- **Windows:** find the COM port in Device Manager and connect with PuTTY or Mu.
+
+To keep a timestamped log for days (useful for catching rare failures), run the logger from this repo on a computer the board is plugged into:
+
+```
+uv run --with pyserial python tools/serial_logger.py logs
+```
+
+It writes one file per day to `logs/`, reconnects if the board restarts, and adds a warning line if the board goes quiet for 15 minutes. Useful things to search for: `grep -E "WARNING|failed|Error|Reset reason" logs/*.log`.
+
+`tools/test_json_filter.py` tests the response filter on a computer: `python3 tools/test_json_filter.py`.
