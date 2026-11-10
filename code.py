@@ -6,6 +6,7 @@ from adafruit_matrixportal.matrix import Matrix
 import adafruit_requests as requests
 import json
 from json_filter import JsonFilter
+import clock
 
 import adafruit_display_text.label
 import displayio
@@ -56,6 +57,24 @@ STATUS_LEDS=setting_bool("STATUS_LEDS", True)
 # Ignore flights above this altitude in feet (0 = no limit). Handy to skip high overflights you can't see.
 MAX_ALTITUDE=setting_int("MAX_ALTITUDE", 0)
 
+# Clock and night mode. Both need UTC_OFFSET (standard time, in hours, e.g. "-5" for US Eastern).
+UTC_OFFSET=clock.parse_offset(os.getenv("UTC_OFFSET"))
+DST_RULE=str(os.getenv("DST_RULE") or "none").strip().upper()  # "US", "EU" or "none"
+# Show the time and date when no flight is overhead
+SHOW_CLOCK=setting_bool("SHOW_CLOCK", True)
+CLOCK_24H=setting_bool("CLOCK_24H", False)
+# The edge of the display fills up over each minute on the idle clock
+SECONDS_RING=setting_bool("SECONDS_RING", True)
+# Night mode: between these local hours (0-23) don't look up flights. -1 = off.
+NIGHT_START=setting_int("NIGHT_START", -1)
+NIGHT_END=setting_int("NIGHT_END", -1)
+if NIGHT_START<0 or NIGHT_END<0:
+    NIGHT_START=NIGHT_END=None
+# At night show a dim clock (True) or turn the display off (False)
+NIGHT_CLOCK=setting_bool("NIGHT_CLOCK", True)
+if UTC_OFFSET is None and (SHOW_CLOCK or NIGHT_START is not None):
+    print("Clock and night mode need UTC_OFFSET in settings.toml")
+
 # How often to query fr24 - quick enough to catch a plane flying over, not so often as to cause any issues, hopefully
 QUERY_DELAY=30
 # After failed searches, wait QUERY_DELAY * 2^errors seconds (capped) before trying again
@@ -82,6 +101,12 @@ ROW_ONE_COLOUR=0x888888
 ROW_TWO_COLOUR=0xAA5500
 ROW_THREE_COLOUR=0x006600
 PLANE_COLOUR=0x880000
+CLOCK_COLOUR=0x888888
+DATE_COLOUR=0x004488
+# The matrix only has 4 brightness levels per colour, so 0x44 is the dimmest that still lights
+NIGHT_COLOUR=0x440000
+RING_COLOUR=0xFFFFFF
+RING_FILL_COLOUR=CLOCK_COLOUR
 # Time in seconds to wait between scrolling one label and the next
 PAUSE_BETWEEN_LABEL_SCROLLING=3
 # speed plane animation will move - pause time per pixel shift in seconds
@@ -286,6 +311,168 @@ def display_flight():
 # Blank the display when a flight is no longer found
 def clear_flight():
     label1.text=label2.text=label3.text=""
+
+
+# ---- Clock and night mode ----
+
+# Time comes from the Date header of FR24's search responses (esp.get_time() in
+# adafruit_esp32spi fails with ESP32 firmware 3.x). We remember the UTC time at a
+# point on the monotonic clock and count forward from there, resyncing every few hours.
+TIME_RESYNC_NS=3*3600*1000000000
+utc_base=None
+mono_base=0
+last_time_sync=0
+
+def update_time_from_response(response):
+    global utc_base, mono_base, last_time_sync
+    if UTC_OFFSET is None:
+        return
+    now=time.monotonic_ns()
+    if utc_base is not None and now-last_time_sync<TIME_RESYNC_NS:
+        return
+    t=clock.parse_http_date(get_header(response, "Date"))
+    if t is None:
+        return
+    first=utc_base is None
+    utc_base=t
+    mono_base=now
+    last_time_sync=now
+    if first:
+        lt=clock.local_time(t, UTC_OFFSET, DST_RULE)
+        print("Time set: "+clock.format_date(lt[1], lt[2], lt[6])+" "+clock.format_time(lt[3], lt[4], True))
+
+# Local time as (year, month, day, hour, minute, second, weekday), or None if unknown
+def local_now():
+    if utc_base is None:
+        return None
+    utc=utc_base+(time.monotonic_ns()-mono_base)//1000000000
+    return clock.local_time(utc, UTC_OFFSET, DST_RULE)
+
+def in_night():
+    if NIGHT_START is None:
+        return False
+    lt=local_now()
+    return lt is not None and clock.is_night(lt[3], NIGHT_START, NIGHT_END)
+
+clock_label = adafruit_display_text.label.Label(FONT, color=CLOCK_COLOUR, text="")
+clock_label.y = 10
+date_label = adafruit_display_text.label.Label(FONT, color=DATE_COLOUR, text="")
+date_label.y = 23
+# Seconds ring: the edge of the display fills clockwise from top centre over each minute,
+# with a brighter head at the current second, then clears for the next minute.
+# Drawn into a 2-bit bitmap (512 bytes).
+RING_W=display.width
+RING_H=display.height
+RING_LEN=2*(RING_W+RING_H)-4
+ring_bitmap=displayio.Bitmap(RING_W, RING_H, 4)
+ring_palette=displayio.Palette(4)
+ring_palette[0]=0x000000
+ring_palette.make_transparent(0)
+ring_palette[1]=RING_COLOUR       # head
+ring_palette[2]=RING_FILL_COLOUR  # the part of the minute already gone
+ring_tg=displayio.TileGrid(ring_bitmap, pixel_shader=ring_palette)
+ring_pos=-1
+
+def ring_xy(i):
+    # Position i along the edge, starting at top centre and going clockwise
+    i=(i+RING_W//2)%RING_LEN
+    if i<RING_W:
+        return i, 0
+    i-=RING_W
+    if i<RING_H-1:
+        return RING_W-1, i+1
+    i-=RING_H-1
+    if i<RING_W-1:
+        return RING_W-2-i, RING_H-1
+    i-=RING_W-1
+    return 0, RING_H-2-i
+
+def update_ring():
+    global ring_pos
+    # Sub-second position within the current minute (UTC and local seconds are the same)
+    ns=(utc_base%60)*1000000000+(time.monotonic_ns()-mono_base)
+    pos=(ns%60000000000)*RING_LEN//60000000000
+    if pos==ring_pos:
+        return
+    if ring_pos<0 or pos<ring_pos:
+        # New minute (or first draw): start again from the top
+        ring_bitmap.fill(0)
+        start=0
+    else:
+        # Only draw what's new since last time; the old head becomes fill
+        start=ring_pos
+    for i in range(start, pos):
+        x, y=ring_xy(i)
+        ring_bitmap[x, y]=2
+    x, y=ring_xy(pos)
+    ring_bitmap[x, y]=1
+    ring_pos=pos
+
+clock_group = displayio.Group()
+clock_group.append(ring_tg)
+clock_group.append(clock_label)
+clock_group.append(date_label)
+blank_group = displayio.Group()
+
+def set_centered(label, text):
+    # Only touch the label when the text changes, to avoid needless allocations
+    if label.text!=text:
+        label.text=text
+        label.x=max(0, (display.width-label.bounding_box[2])//2)
+
+clock_shown_key=None
+
+def ring_active(night=False):
+    return SECONDS_RING and not night and utc_base is not None
+
+# Show the clock (dim and without the date at night). Returns False if the time isn't known.
+def show_clock(night=False):
+    global clock_shown_key
+    lt=local_now()
+    if lt is None:
+        return False
+    # Text only needs redrawing when the minute (or day/night) changes
+    key=(lt[3]*60+lt[4])*2+(1 if night else 0)
+    if key!=clock_shown_key:
+        clock_shown_key=key
+        set_centered(clock_label, clock.format_time(lt[3], lt[4], CLOCK_24H))
+        if night:
+            clock_label.color=NIGHT_COLOUR
+            set_centered(date_label, "")
+        else:
+            clock_label.color=CLOCK_COLOUR
+            set_centered(date_label, clock.format_date(lt[1], lt[2], lt[6]))
+    ring_tg.hidden=not ring_active(night)
+    if not ring_tg.hidden:
+        update_ring()
+    if display.root_group is not clock_group:
+        display.root_group=clock_group
+    return True
+
+# Idle screen when no flight is overhead: the clock if enabled, otherwise blank labels
+def show_idle():
+    if not (SHOW_CLOCK and show_clock()):
+        display.root_group=g
+
+def show_night():
+    if not (NIGHT_CLOCK and show_clock(night=True)):
+        display.root_group=blank_group
+
+# Wait, keeping the watchdog fed and the clock on screen up to date.
+# Ticks quickly while the seconds ring is running so it moves smoothly.
+def idle_wait(total_seconds, night=False):
+    end=time.monotonic()+total_seconds
+    while True:
+        w.feed()
+        if night:
+            show_night()
+        else:
+            show_idle()
+        remaining=end-time.monotonic()
+        if remaining<=0:
+            break
+        step=0.1 if (SHOW_CLOCK and ring_active(night)) else 5
+        time.sleep(min(step, remaining))
 
 
 # Take the flight ID we found with a search, and load details about it
@@ -534,6 +721,7 @@ def get_flights():
                     pass
             print_body_preview(response)
             return None
+        update_time_from_response(response)
         try:
             data = response.json()
         except ValueError as e:
@@ -589,9 +777,23 @@ last_flight=''
 failed_flight=''
 failed_attempts=0
 consecutive_errors=0
+was_night=False
 while True:
 
     w.feed()
+
+    # Night mode: no flight lookups, just a dim clock or a dark display
+    if in_night():
+        if not was_night:
+            print("Night mode on until "+str(NIGHT_END)+":00 - pausing flight lookups")
+            was_night=True
+            last_flight=''
+            clear_flight()
+        idle_wait(60, night=True)
+        continue
+    if was_night:
+        print("Night mode off - resuming flight lookups")
+        was_night=False
 
     flight_id=get_flights()
     w.feed()
@@ -660,14 +862,17 @@ while True:
             w.feed()
             gc.collect()
     else:
-        #print("No flights found, clear display")
+        # No flight overhead - blank the flight labels and show the idle clock
         clear_flight()
-    
+
     # Aggressive garbage collection to avoid memory fragmentation
     w.feed()
     gc.collect()
-    
+
     # wait QUERY_DELAY seconds but keep watchdog fed in 5s intervals
-    feed_sleep(QUERY_DELAY, step_seconds=5)
+    if flight_id:
+        feed_sleep(QUERY_DELAY, step_seconds=5)
+    else:
+        idle_wait(QUERY_DELAY)
     w.feed()
     gc.collect()

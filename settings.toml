@@ -13,3 +13,19 @@ MAX_ALTITUDE = 0
 
 # Optional: "True" or "False" to enable or disable the status LED
 STATUS_LEDS = "True"
+
+# Optional clock and night mode. Both need UTC_OFFSET: your standard-time offset from UTC in hours
+# (e.g. "-5" US Eastern, "-8" US Pacific, "0" UK, "1" central Europe, "5.5" India).
+# DST_RULE is "US", "EU" or "none" for when clocks go forward.
+UTC_OFFSET = "0"
+DST_RULE = "EU"
+# Show the time and date when no flight is overhead, and 12 or 24 hour format
+SHOW_CLOCK = "True"
+CLOCK_24H = "True"
+# The edge of the display fills up over each minute, like a second hand
+SECONDS_RING = "True"
+# Night mode: between these hours (0-23, local time) don't look up flights. Remove or set to -1 to disable.
+NIGHT_START = 23
+NIGHT_END = 6
+# At night show a dim clock ("True") or turn the display off ("False")
+NIGHT_CLOCK = "True"
