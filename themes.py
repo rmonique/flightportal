@@ -17,8 +17,8 @@
 THEMES = {
     "classic": {
         "row1": 0x888888, "row2": 0xAA5500, "row3": 0x006600, "plane": 0x880000,
-        # idle clock in whites and greys: bright time, softer details, dim ring
-        "clock": 0xCCCCCC, "date": 0x888888, "count": 0x888888, "temp": 0x888888, "night": 0x440000,
+        # idle clock: white and grey, with amber temperature and red plane count as the only colours
+        "clock": 0xCCCCCC, "date": 0x888888, "count": 0xCC0000, "temp": 0xCC8800, "night": 0x440000,
         "ring": 0xFFFFFF, "ring_fill": 0x444444, "ring_fill_2": None, "ring_stripe": 4,
         "accent": (),
         "particles": None,

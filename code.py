@@ -558,9 +558,9 @@ temp_label.y=5
 # Unit letter, used when the degree sign is drawn so it can sit 1 pixel after it
 unit_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
 unit_label.y=5
-degree_bitmap=displayio.Bitmap(3, 3, 2)
-for _x, _y in ((1, 0), (0, 1), (2, 1), (1, 2)):
-    degree_bitmap[_x, _y]=1
+DEGREE_SIZE=2  # a solid 2x2 square
+degree_bitmap=displayio.Bitmap(DEGREE_SIZE, DEGREE_SIZE, 2)
+degree_bitmap.fill(1)
 degree_palette=displayio.Palette(2)
 degree_palette[0]=0x000000
 degree_palette.make_transparent(0)
@@ -776,7 +776,7 @@ def show_clock(night=False):
             degree_tg.y=temp_label.y+temp_label.bounding_box[1]+2
             degree_tg.hidden=False
             unit_label.text=TEMP_UNIT
-            unit_label.x=degree_tg.x+4
+            unit_label.x=degree_tg.x+DEGREE_SIZE+1
         else:
             temp_label.text=temp
             degree_tg.hidden=True
