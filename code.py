@@ -63,6 +63,14 @@ DST_RULE=str(os.getenv("DST_RULE") or "none").strip().upper()  # "US", "EU" or "
 # Show the time and date when no flight is overhead
 SHOW_CLOCK=setting_bool("SHOW_CLOCK", True)
 CLOCK_24H=setting_bool("CLOCK_24H", False)
+# Show how many planes have been shown today in the top-right corner of the idle clock
+SHOW_COUNT=setting_bool("SHOW_COUNT", True)
+# Show the outside temperature in the top-left of the idle clock, in "C" or "F"
+SHOW_TEMP=setting_bool("SHOW_TEMP", True)
+TEMP_UNIT="F" if str(os.getenv("TEMP_UNIT") or "C").strip().upper().startswith("F") else "C"
+# The plane animation flies the way the real plane is going (east = right).
+# Set True if your display faces north, so east is on your left.
+FLIP_PLANE_DIRECTION=setting_bool("FLIP_PLANE_DIRECTION", False)
 # The edge of the display fills up over each minute on the idle clock
 SECONDS_RING=setting_bool("SECONDS_RING", True)
 # Night mode: between these local hours (0-23) don't look up flights. -1 = off.
@@ -96,17 +104,51 @@ BOUNDS_BOX=os.getenv("BOUNDS_BOX")
 if not BOUNDS_BOX:
     raise ValueError("Missing BOUNDS_BOX in settings.toml")
 
-# Colours and timings
-ROW_ONE_COLOUR=0x888888
-ROW_TWO_COLOUR=0xAA5500
-ROW_THREE_COLOUR=0x006600
-PLANE_COLOUR=0x880000
-CLOCK_COLOUR=0x888888
-DATE_COLOUR=0x004488
-# The matrix only has 4 brightness levels per colour, so 0x44 is the dimmest that still lights
-NIGHT_COLOUR=0x440000
-RING_COLOUR=0xFFFFFF
-RING_FILL_COLOUR=CLOCK_COLOUR
+# Colour themes - pick one with THEME in settings.toml.
+# The matrix only has 4 brightness levels per colour channel (0x00, 0x44, 0x88, 0xCC/0xFF),
+# so 0x44 is the dimmest that still lights.
+#   row1/row2/row3: flight number, route, aircraft    plane: the plane that flies across
+#   clock/date/count/temp: idle clock (count = planes today, temp = outside temperature)    night: the dim night clock
+#   ring: head of the seconds ring    ring_fill: the filled part
+#   accent: decoration drawn behind the flight text: None, a name in ACCENTS, or a tuple of names to rotate
+#   ring_fill_2: if set, the fill alternates with this colour in stripes of ring_stripe pixels
+THEMES = {
+    "classic": {
+        "row1": 0x888888, "row2": 0xAA5500, "row3": 0x006600, "plane": 0x880000,
+        "clock": 0x888888, "date": 0xFF4488, "count": 0xAA5500, "temp": 0x0088CC, "night": 0x440000,
+        "ring": 0xFFFFFF, "ring_fill": 0x888888, "ring_fill_2": None, "ring_stripe": 4,
+        "accent": None,
+    },
+    "christmas": {
+        "row1": 0xCC0000, "row2": 0x00AA00, "row3": 0xCC8800, "plane": 0xCC0000,
+        "clock": 0x888888, "date": 0x00AA00, "count": 0xCC0000, "temp": 0xCC8800, "night": 0x440000,
+        # candy cane: red and white stripes
+        "ring": 0xFFFFFF, "ring_fill": 0xCC0000, "ring_fill_2": 0x888888, "ring_stripe": 4,
+        # decorations on the flight display, taking turns per flight
+        "accent": ("holly", "santa", "candy_canes"),
+    },
+}
+THEME_NAME=str(os.getenv("THEME") or "classic").strip().lower()
+if THEME_NAME not in THEMES:
+    print("Unknown THEME "+THEME_NAME+", using classic")
+    THEME_NAME="classic"
+THEME=THEMES[THEME_NAME]
+print("Theme:", THEME_NAME)
+
+ROW_ONE_COLOUR=THEME["row1"]
+ROW_TWO_COLOUR=THEME["row2"]
+ROW_THREE_COLOUR=THEME["row3"]
+PLANE_COLOUR=THEME["plane"]
+CLOCK_COLOUR=THEME["clock"]
+DATE_COLOUR=THEME["date"]
+COUNT_COLOUR=THEME["count"]
+TEMP_COLOUR=THEME["temp"]
+NIGHT_COLOUR=THEME["night"]
+RING_COLOUR=THEME["ring"]
+RING_FILL_COLOUR=THEME["ring_fill"]
+RING_FILL_COLOUR_2=THEME["ring_fill_2"]
+RING_STRIPE=THEME["ring_stripe"]
+ACCENT=THEME["accent"]
 # Time in seconds to wait between scrolling one label and the next
 PAUSE_BETWEEN_LABEL_SCROLLING=3
 # speed plane animation will move - pause time per pixel shift in seconds
@@ -253,20 +295,162 @@ label2_long=''
 label3_short=''
 label3_long=''
 
-# Add the labels to the display
+# Theme decorations drawn behind the flight text. Each is pixel art (one string per row,
+# "." = transparent), the colour of each character, and where to draw copies of it:
+# (x, y, flip_upside_down). Negative x/y count from the right/bottom edge (-1 = flush
+# against it, -2 = one pixel in); y None = centred vertically.
+
+# Candy cane: the shape, striped red and white diagonally
+CANE_SHAPE = (
+    "..SSS..",
+    ".SSSSS.",
+    "SS...SS",
+    "SS...SS",
+    "S....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+    ".....SS",
+)
+CANE_ROWS = tuple(
+    "".join((("R" if ((x+y)//2)%2==0 else "W") if c=="S" else ".") for x, c in enumerate(row))
+    for y, row in enumerate(CANE_SHAPE)
+)
+
+ACCENTS = {
+    "santa": {
+        "rows": (
+            ".....RRRR....",
+            "....RRRRRR...",
+            "...RRRRRRRR..",
+            "..RRRRRRRRRRW",
+            ".WWWWWWWWWWWW",
+            ".WWWWWWWWWW..",
+            "..SSSSSSSS...",
+            "..S.SSSS.S...",
+            "..SSSSSSSS...",
+            ".WSSSRRSSSW..",
+            ".WWSWWWWSWW..",
+            ".WWWWWWWWWW..",
+            "..WWWWWWWW...",
+            "...WWWWWW....",
+            ".....WW......",
+        ),
+        # R red, W white, S skin
+        "colours": {"R": 0xCC0000, "W": 0xCCCCCC, "S": 0xFF8844},
+        "at": ((-2, None, False),),
+    },
+    "candy_canes": {
+        "rows": CANE_ROWS,
+        "colours": {"R": 0xCC0000, "W": 0xCCCCCC},
+        "at": ((-2, 1, False), (-2, -2, False), (-11, -2, False)),
+    },
+    "holly": {
+        "rows": (
+            "L...L.......L...L",
+            "LL.LLL.....LLL.LL",
+            ".LLLlLL...LLlLLL.",
+            "LLLLLlLL.LLlLLLLL",
+            ".L.LLLlL.LlLLL.L.",
+            "....L.RR.RR.L....",
+            "......rR.rR......",
+            "........RR.......",
+            "........rR.......",
+        ),
+        # L leaf, l leaf vein, R berry, r berry shadow
+        "colours": {"L": 0x008800, "l": 0x00CC00, "R": 0xCC0000, "r": 0x880000},
+        # top-right corner, and upside down in the bottom-right
+        "at": ((-1, 0, False), (-1, -1, True)),
+    },
+}
+
+def make_accent_group(name):
+    accent=ACCENTS.get(name)
+    if accent is None:
+        print("Unknown accent "+str(name))
+        return None
+    rows=accent["rows"]
+    w=len(rows[0])
+    h=len(rows)
+    chars=list(accent["colours"].keys())
+    bitmap=displayio.Bitmap(len(rows[0]), len(rows), len(chars)+1)
+    palette=displayio.Palette(len(chars)+1)
+    palette[0]=0x000000
+    palette.make_transparent(0)
+    for i, ch in enumerate(chars):
+        palette[i+1]=accent["colours"][ch]
+    for y, row in enumerate(rows):
+        for x, ch in enumerate(row):
+            if ch in accent["colours"]:
+                bitmap[x, y]=chars.index(ch)+1
+    group=displayio.Group()
+    for x, y, flip in accent["at"]:
+        if x<0:
+            x=display.width-w+x+1
+        if y is None:
+            y=(display.height-h)//2
+        elif y<0:
+            y=display.height-h+y+1
+        tg=displayio.TileGrid(bitmap, pixel_shader=palette, x=x, y=y)
+        tg.flip_y=flip  # not accepted as a constructor argument
+        group.append(tg)
+    return group
+
+# The theme's accent can be one name or several, which take turns: each new flight gets the next one
+accent_names=ACCENT if isinstance(ACCENT, tuple) else ((ACCENT,) if ACCENT else ())
+accent_groups=[]
+for name in accent_names:
+    ag=make_accent_group(name)
+    if ag is not None:
+        accent_groups.append(ag)
+accent_index=-1
+
+# Add the labels to the display, on top of any theme decoration (slot 0)
 g = displayio.Group()
+g.append(displayio.Group())
 g.append(label1)
 g.append(label2)
 g.append(label3)
 display.root_group = g
 
-# Scroll the plane bitmap right to left (same direction as scrolling text)
+# Heading (degrees, 0=north, 90=east) of the flight being shown, from the search results
+flight_heading=None
+
+# Should the plane fly left to right? Eastbound flights do, as on a map with north up.
+# FLIP_PLANE_DIRECTION swaps this, e.g. if the display faces north so east is on your left.
+def plane_flies_right():
+    if flight_heading is None or flight_heading%180==0:
+        return False  # unknown, or due north/south: use the original right-to-left
+    eastbound=0<flight_heading%360<180
+    return eastbound!=FLIP_PLANE_DIRECTION
+
+# Scroll the plane bitmap across the screen in the direction the real plane is flying
+# (the bitmap points left, so it's mirrored to fly right)
 def plane_animation():
     display.root_group = planeG
-    for i in range(display.width+24,-12,-1):
+    right=plane_flies_right()
+    print("Heading "+str(flight_heading)+", plane flies "+("right" if right else "left"))
+    planeTg.flip_x=right
+    if right:
+        positions=range(-24, display.width+12)
+    else:
+        positions=range(display.width+24, -12, -1)
+    for i in positions:
             planeG.x=i
             w.feed()
             feed_sleep(PLANE_SPEED, step_seconds=PLANE_SPEED)
+
+# Put the theme's next decoration behind the flight text (no-op without accents)
+def next_accent():
+    global accent_index
+    if not accent_groups:
+        return
+    accent_index=(accent_index+1)%len(accent_groups)
+    g[0]=accent_groups[accent_index]
 
 # Scroll a label, start at the right edge of the screen and go left one pixel at a time
 # Until the right edge of the label reaches the left edge of the screen
@@ -281,6 +465,7 @@ def scroll(line):
 # Populate the labels, then scroll longer versions of the text
 def display_flight():
 
+    next_accent()
     display.root_group = g
     label1.text=label1_short
     label2.text=label2_short
@@ -348,6 +533,117 @@ def local_now():
     utc=utc_base+(time.monotonic_ns()-mono_base)//1000000000
     return clock.local_time(utc, UTC_OFFSET, DST_RULE)
 
+# ---- Planes-seen-today counter ----
+# Counts flights shown on the display, resetting at local midnight. Saved in the
+# chip's non-volatile memory (microcontroller.nvm) so it survives restarts:
+# 2 magic bytes, 2 bytes local day number, 2 bytes count.
+COUNT_MAGIC=b"\xf1\x1c"
+count_day=-1
+count_value=0
+
+def load_count():
+    global count_day, count_value
+    try:
+        nvm=microcontroller.nvm
+        if nvm is not None and len(nvm)>=6 and nvm[0:2]==COUNT_MAGIC:
+            count_day=nvm[2]<<8|nvm[3]
+            count_value=nvm[4]<<8|nvm[5]
+    except Exception as e:
+        print("Could not load plane count:", e)
+
+def save_count():
+    try:
+        nvm=microcontroller.nvm
+        if nvm is not None and len(nvm)>=6:
+            nvm[0:6]=COUNT_MAGIC+bytes((count_day>>8&0xFF, count_day&0xFF, count_value>>8&0xFF, count_value&0xFF))
+    except Exception as e:
+        print("Could not save plane count:", e)
+
+def local_day(lt):
+    return clock.days_from_civil(lt[0], lt[1], lt[2])
+
+# Planes shown so far today (0 if the saved count is from an earlier day)
+def planes_today(lt):
+    return count_value if lt is not None and local_day(lt)==count_day else 0
+
+def count_plane():
+    global count_day, count_value
+    lt=local_now()
+    if lt is None:
+        return  # don't know which day it is yet
+    today=local_day(lt)
+    if today!=count_day:
+        count_day=today
+        count_value=0
+    count_value=min(count_value+1, 0xFFFF)
+    save_count()
+    print("Planes today:", count_value)
+
+load_count()
+
+# ---- Outside temperature (Open-Meteo, free, no key) ----
+# Looked up for the centre of BOUNDS_BOX, rounded to 2 decimal places (~1km).
+WEATHER_INTERVAL_NS=30*60*1000000000  # refresh every 30 minutes
+WEATHER_RETRY_NS=5*60*1000000000      # after a failure, try again in 5 minutes
+WEATHER_STALE_NS=2*3600*1000000000    # stop showing a reading older than this
+temp_value=None
+temp_time=0
+last_weather_attempt=None
+# Use the font's degree sign if it has one
+DEGREE="°" if FONT.get_glyph(0xB0) else ""
+
+def weather_url():
+    try:
+        b=[float(v) for v in BOUNDS_BOX.split(",")]
+        lat="%.2f" % ((b[0]+b[1])/2)
+        lon="%.2f" % ((b[2]+b[3])/2)
+    except (ValueError, IndexError):
+        return None
+    unit="fahrenheit" if TEMP_UNIT=="F" else "celsius"
+    return ("https://api.open-meteo.com/v1/forecast?latitude="+lat+"&longitude="+lon+
+            "&current=temperature_2m&temperature_unit="+unit)
+
+def update_weather():
+    global temp_value, temp_time, last_weather_attempt
+    if not SHOW_TEMP:
+        return
+    now=time.monotonic_ns()
+    if last_weather_attempt is not None:
+        wait=WEATHER_INTERVAL_NS if (temp_value is not None and now-temp_time<WEATHER_INTERVAL_NS*2) else WEATHER_RETRY_NS
+        if now-last_weather_attempt<wait:
+            return
+    last_weather_attempt=now
+    url=weather_url()
+    if url is None:
+        print("Can't work out a location for the temperature from BOUNDS_BOX")
+        return
+    response=None
+    try:
+        w.feed()
+        response=wifi.get(url, headers={"Accept": "application/json"}, timeout=REQUEST_TIMEOUT)
+        if response.status_code!=200:
+            print("Weather HTTP status:", response.status_code)
+            return
+        t=safe_get(response.json(), "current", "temperature_2m")
+        if t is None:
+            print("Weather response had no temperature")
+            return
+        temp_value=round(t)
+        temp_time=now
+        print("Temperature:", str(temp_value)+TEMP_UNIT)
+    except (RuntimeError, OSError, ValueError, TimeoutError, MemoryError, requests.OutOfRetries) as e:
+        print("Weather error:", e)
+    finally:
+        if response is not None:
+            response.close()
+        w.feed()
+        gc.collect()
+
+def current_temp_text():
+    if not SHOW_TEMP or temp_value is None or time.monotonic_ns()-temp_time>WEATHER_STALE_NS:
+        return ""
+    return str(temp_value)+DEGREE+TEMP_UNIT
+
 def in_night():
     if NIGHT_START is None:
         return False
@@ -355,9 +651,39 @@ def in_night():
     return lt is not None and clock.is_night(lt[3], NIGHT_START, NIGHT_END)
 
 clock_label = adafruit_display_text.label.Label(FONT, color=CLOCK_COLOUR, text="")
-clock_label.y = 10
 date_label = adafruit_display_text.label.Label(FONT, color=DATE_COLOUR, text="")
-date_label.y = 23
+count_label = adafruit_display_text.label.Label(FONT, color=COUNT_COLOUR, text="")
+# Centred time and date. Once a plane has been shown today, its count goes in the
+# top-right corner and the time and date move down a little to make room.
+# The outer rows/columns are left clear for the seconds ring.
+CLOCK_Y=(10, 23)             # time, date with no count
+CLOCK_Y_WITH_COUNT=(15, 25)  # time, date with the count above
+count_label.y=5
+COUNT_RIGHT=display.width-2  # count's right edge, inside the ring
+temp_label = adafruit_display_text.label.Label(FONT, color=TEMP_COLOUR, text="")
+temp_label.x=2
+temp_label.y=5
+
+# Tiny plane icon (nose pointing right) shown beside the count
+ICON_ROWS=(
+    "...#...",
+    "#..##..",
+    "#######",
+    "#..##..",
+    "...#...",
+)
+ICON_W=len(ICON_ROWS[0])
+icon_bitmap=displayio.Bitmap(ICON_W, len(ICON_ROWS), 2)
+icon_palette=displayio.Palette(2)
+icon_palette[0]=0x000000
+icon_palette.make_transparent(0)
+icon_palette[1]=COUNT_COLOUR
+for iy, row in enumerate(ICON_ROWS):
+    for ix, ch in enumerate(row):
+        if ch=="#":
+            icon_bitmap[ix, iy]=1
+icon_tg=displayio.TileGrid(icon_bitmap, pixel_shader=icon_palette, y=3)
+icon_tg.hidden=True
 # Seconds ring: the edge of the display fills clockwise from top centre over each minute,
 # with a brighter head at the current second, then clears for the next minute.
 # Drawn into a 2-bit bitmap (512 bytes).
@@ -370,6 +696,7 @@ ring_palette[0]=0x000000
 ring_palette.make_transparent(0)
 ring_palette[1]=RING_COLOUR       # head
 ring_palette[2]=RING_FILL_COLOUR  # the part of the minute already gone
+ring_palette[3]=RING_FILL_COLOUR_2 if RING_FILL_COLOUR_2 is not None else RING_FILL_COLOUR
 ring_tg=displayio.TileGrid(ring_bitmap, pixel_shader=ring_palette)
 ring_pos=-1
 
@@ -403,7 +730,7 @@ def update_ring():
         start=ring_pos
     for i in range(start, pos):
         x, y=ring_xy(i)
-        ring_bitmap[x, y]=2
+        ring_bitmap[x, y]=2+(i//RING_STRIPE)%2  # palette 2/3 alternate in stripes (same colour if no stripes)
     x, y=ring_xy(pos)
     ring_bitmap[x, y]=1
     ring_pos=pos
@@ -412,6 +739,9 @@ clock_group = displayio.Group()
 clock_group.append(ring_tg)
 clock_group.append(clock_label)
 clock_group.append(date_label)
+clock_group.append(count_label)
+clock_group.append(icon_tg)
+clock_group.append(temp_label)
 blank_group = displayio.Group()
 
 def set_centered(label, text):
@@ -431,17 +761,34 @@ def show_clock(night=False):
     lt=local_now()
     if lt is None:
         return False
-    # Text only needs redrawing when the minute (or day/night) changes
-    key=(lt[3]*60+lt[4])*2+(1 if night else 0)
+    # Top row: temperature on the left, plane icon + today's count on the right
+    planes=planes_today(lt) if (SHOW_COUNT and not night) else 0
+    temp=current_temp_text() if not night else ""
+    # Text only needs redrawing when the minute, day/night, count or temperature changes
+    key=(((lt[3]*60+lt[4])*2+(1 if night else 0))*100000+planes, temp)
     if key!=clock_shown_key:
         clock_shown_key=key
         set_centered(clock_label, clock.format_time(lt[3], lt[4], CLOCK_24H))
+        temp_label.text=temp
+        if planes:
+            count_label.text=str(planes)
+            count_label.x=COUNT_RIGHT-count_label.bounding_box[2]
+            icon_tg.x=count_label.x-ICON_W-2
+            icon_tg.hidden=False
+        else:
+            count_label.text=""
+            icon_tg.hidden=True
         if night:
             clock_label.color=NIGHT_COLOUR
             set_centered(date_label, "")
+            clock_label.y=CLOCK_Y[0]
         else:
             clock_label.color=CLOCK_COLOUR
             set_centered(date_label, clock.format_date(lt[1], lt[2], lt[6]))
+            if planes or temp:
+                clock_label.y, date_label.y=CLOCK_Y_WITH_COUNT
+            else:
+                clock_label.y, date_label.y=CLOCK_Y
     ring_tg.hidden=not ring_active(night)
     if not ring_tg.hidden:
         update_ring()
@@ -741,8 +1088,10 @@ def get_flights():
     # Besides "version" and "full_count", each key is a flight ID mapped to a list:
     # [icao24, lat, lon, heading, altitude_ft, speed_kt, squawk, radar, type, reg, time, origin, dest, flight, ...]
     # Pick the lowest flight (most likely the one you can see), skipping any above MAX_ALTITUDE.
+    global flight_heading
     best_id=None
     best_alt=None
+    best_heading=None
     count=0
     skipped=0
     for flight_id, flight_info in data.items():
@@ -756,8 +1105,10 @@ def get_flights():
         if best_alt is None or alt<best_alt:
             best_id=flight_id
             best_alt=alt
+            best_heading=flight_info[3] if isinstance(flight_info[3], int) else None
     del data
     if best_id:
+        flight_heading=best_heading
         if count>1:
             print("Search 200: "+str(count)+" flights, lowest is "+best_id+" at "+str(best_alt)+"ft")
         return best_id
@@ -795,6 +1146,7 @@ while True:
         print("Night mode off - resuming flight lookups")
         was_night=False
 
+    update_weather()
     flight_id=get_flights()
     w.feed()
 
@@ -831,6 +1183,7 @@ while True:
                     plane_animation()
                     display_flight()
                     shown=True
+                    count_plane()
                     # Clear any remaining objects from display
                     w.feed()
                     gc.collect()

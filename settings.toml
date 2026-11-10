@@ -11,6 +11,9 @@ BOUNDS_BOX = "51.6,51.4,-0.3,-0.1"
 # When several flights are in the box, the lowest one is shown.
 MAX_ALTITUDE = 0
 
+# Optional: colour theme, "classic" or "christmas" (themes are defined in THEMES in code.py)
+THEME = "classic"
+
 # Optional: "True" or "False" to enable or disable the status LED
 STATUS_LEDS = "True"
 
@@ -24,6 +27,14 @@ SHOW_CLOCK = "True"
 CLOCK_24H = "True"
 # The edge of the display fills up over each minute, like a second hand
 SECONDS_RING = "True"
+# Show how many planes have been shown today in the top-right corner
+SHOW_COUNT = "True"
+# Show the outside temperature in the top-left (from open-meteo.com, for the middle of BOUNDS_BOX)
+SHOW_TEMP = "True"
+TEMP_UNIT = "C"
+# The plane animation flies the way the real plane is going, east to the right as on a map.
+# Set "True" if your display faces north, so east is on your left.
+FLIP_PLANE_DIRECTION = "False"
 # Night mode: between these hours (0-23, local time) don't look up flights. Remove or set to -1 to disable.
 NIGHT_START = 23
 NIGHT_END = 6

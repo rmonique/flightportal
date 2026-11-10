@@ -33,8 +33,10 @@ I soldered a connection straight onto the panel's power port as below, for neatn
 2. Copy `code.py`, `json_filter.py`, `clock.py`, `ICAO.csv` and `settings.toml` to the `CIRCUITPY` drive.
 3. Edit `settings.toml` on the drive: add your WiFi name and password, and set `BOUNDS_BOX` to the area you want to watch (top latitude, bottom latitude, left longitude, right longitude). The rest is optional:
    - `MAX_ALTITUDE` skips flights above that height; otherwise the lowest flight in the box is shown.
-   - `UTC_OFFSET` and `DST_RULE` set your time zone, which turns on a clock (time and date) when no flight is overhead. `SHOW_CLOCK` and `CLOCK_24H` control it, and `SECONDS_RING` fills the edge of the display over each minute like a second hand.
+   - `UTC_OFFSET` and `DST_RULE` set your time zone, which turns on a clock (time and date) when no flight is overhead. `SHOW_CLOCK` and `CLOCK_24H` control it, and `SECONDS_RING` fills the edge of the display over each minute like a second hand. `SHOW_COUNT` shows how many planes have been shown today in the top-right corner, and `SHOW_TEMP` the outside temperature in the top-left (`TEMP_UNIT` "C" or "F"; from open-meteo.com for the middle of `BOUNDS_BOX`, checked every 30 minutes).
+   - The plane animation flies the way the real plane is heading, east to the right as on a map. Set `FLIP_PLANE_DIRECTION = "True"` if your display faces north (east on your left).
    - `NIGHT_START` and `NIGHT_END` (hours, local time) pause flight lookups overnight and show a dim clock, or turn the display off with `NIGHT_CLOCK = "False"`.
+   - `THEME` picks a colour theme: `"classic"` or `"christmas"` (red and green, with a candy-cane seconds ring). Add your own to `THEMES` in `code.py`.
    - `STATUS_LEDS` turns the status LED on or off.
 
 If WiFi always fails on the first connect attempt after a restart, the board's ESP32 WiFi firmware is probably old (the boot log prints its version). Updating it is covered in Adafruit's [Upgrading AirLift ESP32 Firmware](https://learn.adafruit.com/upgrading-esp32-firmware) guide; version 3.x works well.
