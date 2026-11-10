@@ -11,8 +11,10 @@ BOUNDS_BOX = "51.6,51.4,-0.3,-0.1"
 # When several flights are in the box, the lowest one is shown.
 MAX_ALTITUDE = 0
 
-# Optional: colour theme, "classic" or "christmas" (themes are defined in THEMES in code.py)
-THEME = "classic"
+# Optional: colour theme: "classic", "christmas", "halloween", "thanksgiving", "july4", "newyear",
+# "valentines", or "auto" to switch with the calendar (Valentine's Feb 7-14, July 4th Jul 1-5,
+# Halloween Oct 15-31, Thanksgiving Nov 15-30, Christmas Dec 1-26, New Year Dec 27-Jan 2, classic otherwise). Themes are defined in themes.py.
+THEME = "auto"
 
 # Optional: "True" or "False" to enable or disable the status LED
 STATUS_LEDS = "True"

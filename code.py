@@ -7,6 +7,8 @@ import adafruit_requests as requests
 import json
 from json_filter import JsonFilter
 import clock
+import themes
+import random
 
 import adafruit_display_text.label
 import displayio
@@ -104,51 +106,16 @@ BOUNDS_BOX=os.getenv("BOUNDS_BOX")
 if not BOUNDS_BOX:
     raise ValueError("Missing BOUNDS_BOX in settings.toml")
 
-# Colour themes - pick one with THEME in settings.toml.
-# The matrix only has 4 brightness levels per colour channel (0x00, 0x44, 0x88, 0xCC/0xFF),
-# so 0x44 is the dimmest that still lights.
-#   row1/row2/row3: flight number, route, aircraft    plane: the plane that flies across
-#   clock/date/count/temp: idle clock (count = planes today, temp = outside temperature)    night: the dim night clock
-#   ring: head of the seconds ring    ring_fill: the filled part
-#   accent: decoration drawn behind the flight text: None, a name in ACCENTS, or a tuple of names to rotate
-#   ring_fill_2: if set, the fill alternates with this colour in stripes of ring_stripe pixels
-THEMES = {
-    "classic": {
-        "row1": 0x888888, "row2": 0xAA5500, "row3": 0x006600, "plane": 0x880000,
-        "clock": 0x888888, "date": 0xFF4488, "count": 0xAA5500, "temp": 0x0088CC, "night": 0x440000,
-        "ring": 0xFFFFFF, "ring_fill": 0x888888, "ring_fill_2": None, "ring_stripe": 4,
-        "accent": None,
-    },
-    "christmas": {
-        "row1": 0xCC0000, "row2": 0x00AA00, "row3": 0xCC8800, "plane": 0xCC0000,
-        "clock": 0x888888, "date": 0x00AA00, "count": 0xCC0000, "temp": 0xCC8800, "night": 0x440000,
-        # candy cane: red and white stripes
-        "ring": 0xFFFFFF, "ring_fill": 0xCC0000, "ring_fill_2": 0x888888, "ring_stripe": 4,
-        # decorations on the flight display, taking turns per flight
-        "accent": ("holly", "santa", "candy_canes"),
-    },
-}
-THEME_NAME=str(os.getenv("THEME") or "classic").strip().lower()
-if THEME_NAME not in THEMES:
-    print("Unknown THEME "+THEME_NAME+", using classic")
-    THEME_NAME="classic"
-THEME=THEMES[THEME_NAME]
-print("Theme:", THEME_NAME)
-
-ROW_ONE_COLOUR=THEME["row1"]
-ROW_TWO_COLOUR=THEME["row2"]
-ROW_THREE_COLOUR=THEME["row3"]
-PLANE_COLOUR=THEME["plane"]
-CLOCK_COLOUR=THEME["clock"]
-DATE_COLOUR=THEME["date"]
-COUNT_COLOUR=THEME["count"]
-TEMP_COLOUR=THEME["temp"]
-NIGHT_COLOUR=THEME["night"]
-RING_COLOUR=THEME["ring"]
-RING_FILL_COLOUR=THEME["ring_fill"]
-RING_FILL_COLOUR_2=THEME["ring_fill_2"]
-RING_STRIPE=THEME["ring_stripe"]
-ACCENT=THEME["accent"]
+# Colour theme: a name in themes.THEMES, or "auto" to pick one from the date (themes.AUTO_THEMES).
+# Colours are applied by apply_theme() once everything is set up, and again when "auto" switches.
+THEME_SETTING=str(os.getenv("THEME") or "classic").strip().lower()
+if THEME_SETTING!="auto" and THEME_SETTING not in themes.THEMES:
+    print("Unknown THEME "+THEME_SETTING+", using classic")
+    THEME_SETTING="classic"
+theme_name=None
+CLOCK_COLOUR=0x888888
+NIGHT_COLOUR=0x440000
+RING_STRIPE=4
 # Time in seconds to wait between scrolling one label and the next
 PAUSE_BETWEEN_LABEL_SCROLLING=3
 # speed plane animation will move - pause time per pixel shift in seconds
@@ -253,7 +220,7 @@ def safe_get(obj, *keys):
 # Little plane to scroll across when we find a flight overhead
 planeBmp = displayio.Bitmap(12, 12, 2)
 planePalette = displayio.Palette(2)
-planePalette[1] = PLANE_COLOUR
+planePalette[1] = 0x880000
 planePalette[0] = 0x000000
 planeBmp[6,0]=planeBmp[6,1]=planeBmp[5,1]=planeBmp[4,2]=planeBmp[5,2]=planeBmp[6,2]=1
 planeBmp[9,3]=planeBmp[5,3]=planeBmp[4,3]=planeBmp[3,3]=1
@@ -268,21 +235,21 @@ planeG.append(planeTg)
 # We can fit three rows of text on a panel, so one label for each. We'll change their text as needed
 label1 = adafruit_display_text.label.Label(
     FONT,
-    color=ROW_ONE_COLOUR,
+    color=0x888888,
     text="")
 label1.x = 1
 label1.y = 4
 
 label2 = adafruit_display_text.label.Label(
     FONT,
-    color=ROW_TWO_COLOUR,
+    color=0x888888,
     text="")
 label2.x = 1
 label2.y = 15
 
 label3 = adafruit_display_text.label.Label(
     FONT,
-    color=ROW_THREE_COLOUR,
+    color=0x888888,
     text="")
 label3.x = 1
 label3.y = 25
@@ -295,118 +262,41 @@ label2_long=''
 label3_short=''
 label3_long=''
 
-# Theme decorations drawn behind the flight text. Each is pixel art (one string per row,
-# "." = transparent), the colour of each character, and where to draw copies of it:
-# (x, y, flip_upside_down). Negative x/y count from the right/bottom edge (-1 = flush
-# against it, -2 = one pixel in); y None = centred vertically.
-
-# Candy cane: the shape, striped red and white diagonally
-CANE_SHAPE = (
-    "..SSS..",
-    ".SSSSS.",
-    "SS...SS",
-    "SS...SS",
-    "S....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-    ".....SS",
-)
-CANE_ROWS = tuple(
-    "".join((("R" if ((x+y)//2)%2==0 else "W") if c=="S" else ".") for x, c in enumerate(row))
-    for y, row in enumerate(CANE_SHAPE)
-)
-
-ACCENTS = {
-    "santa": {
-        "rows": (
-            ".....RRRR....",
-            "....RRRRRR...",
-            "...RRRRRRRR..",
-            "..RRRRRRRRRRW",
-            ".WWWWWWWWWWWW",
-            ".WWWWWWWWWW..",
-            "..SSSSSSSS...",
-            "..S.SSSS.S...",
-            "..SSSSSSSS...",
-            ".WSSSRRSSSW..",
-            ".WWSWWWWSWW..",
-            ".WWWWWWWWWW..",
-            "..WWWWWWWW...",
-            "...WWWWWW....",
-            ".....WW......",
-        ),
-        # R red, W white, S skin
-        "colours": {"R": 0xCC0000, "W": 0xCCCCCC, "S": 0xFF8844},
-        "at": ((-2, None, False),),
-    },
-    "candy_canes": {
-        "rows": CANE_ROWS,
-        "colours": {"R": 0xCC0000, "W": 0xCCCCCC},
-        "at": ((-2, 1, False), (-2, -2, False), (-11, -2, False)),
-    },
-    "holly": {
-        "rows": (
-            "L...L.......L...L",
-            "LL.LLL.....LLL.LL",
-            ".LLLlLL...LLlLLL.",
-            "LLLLLlLL.LLlLLLLL",
-            ".L.LLLlL.LlLLL.L.",
-            "....L.RR.RR.L....",
-            "......rR.rR......",
-            "........RR.......",
-            "........rR.......",
-        ),
-        # L leaf, l leaf vein, R berry, r berry shadow
-        "colours": {"L": 0x008800, "l": 0x00CC00, "R": 0xCC0000, "r": 0x880000},
-        # top-right corner, and upside down in the bottom-right
-        "at": ((-1, 0, False), (-1, -1, True)),
-    },
-}
-
+# Theme decorations drawn behind the flight text (see themes.ACCENTS). Built when a theme is applied.
 def make_accent_group(name):
-    accent=ACCENTS.get(name)
-    if accent is None:
+    parts=themes.ACCENTS.get(name)
+    if parts is None:
         print("Unknown accent "+str(name))
         return None
-    rows=accent["rows"]
-    w=len(rows[0])
-    h=len(rows)
-    chars=list(accent["colours"].keys())
-    bitmap=displayio.Bitmap(len(rows[0]), len(rows), len(chars)+1)
-    palette=displayio.Palette(len(chars)+1)
-    palette[0]=0x000000
-    palette.make_transparent(0)
-    for i, ch in enumerate(chars):
-        palette[i+1]=accent["colours"][ch]
-    for y, row in enumerate(rows):
-        for x, ch in enumerate(row):
-            if ch in accent["colours"]:
-                bitmap[x, y]=chars.index(ch)+1
     group=displayio.Group()
-    for x, y, flip in accent["at"]:
-        if x<0:
-            x=display.width-w+x+1
-        if y is None:
-            y=(display.height-h)//2
-        elif y<0:
-            y=display.height-h+y+1
-        tg=displayio.TileGrid(bitmap, pixel_shader=palette, x=x, y=y)
-        tg.flip_y=flip  # not accepted as a constructor argument
-        group.append(tg)
+    for rows, colours, placements in parts:
+        w=len(rows[0])
+        h=len(rows)
+        chars=list(colours.keys())
+        bitmap=displayio.Bitmap(w, h, len(chars)+1)
+        palette=displayio.Palette(len(chars)+1)
+        palette[0]=0x000000
+        palette.make_transparent(0)
+        for i, ch in enumerate(chars):
+            palette[i+1]=colours[ch]
+        for y, row in enumerate(rows):
+            for x, ch in enumerate(row):
+                if ch in colours:
+                    bitmap[x, y]=chars.index(ch)+1
+        for x, y, flip in placements:
+            if x<0:
+                x=display.width-w+x+1
+            if y is None:
+                y=(display.height-h)//2
+            elif y<0:
+                y=display.height-h+y+1
+            tg=displayio.TileGrid(bitmap, pixel_shader=palette, x=x, y=y)
+            tg.flip_y=flip  # not accepted as a constructor argument
+            group.append(tg)
     return group
 
-# The theme's accent can be one name or several, which take turns: each new flight gets the next one
-accent_names=ACCENT if isinstance(ACCENT, tuple) else ((ACCENT,) if ACCENT else ())
+# The theme's decorations take turns: each new flight gets the next one
 accent_groups=[]
-for name in accent_names:
-    ag=make_accent_group(name)
-    if ag is not None:
-        accent_groups.append(ag)
 accent_index=-1
 
 # Add the labels to the display, on top of any theme decoration (slot 0)
@@ -589,8 +479,10 @@ WEATHER_STALE_NS=2*3600*1000000000    # stop showing a reading older than this
 temp_value=None
 temp_time=0
 last_weather_attempt=None
-# Use the font's degree sign if it has one
-DEGREE="°" if FONT.get_glyph(0xB0) else ""
+# The built-in font has no degree sign, so unless it does, a tiny circle is drawn
+# between the number and the unit letter
+FONT_HAS_DEGREE=FONT.get_glyph(0xB0) is not None
+DEGREE="°" if FONT_HAS_DEGREE else ""
 
 def weather_url():
     try:
@@ -650,9 +542,9 @@ def in_night():
     lt=local_now()
     return lt is not None and clock.is_night(lt[3], NIGHT_START, NIGHT_END)
 
-clock_label = adafruit_display_text.label.Label(FONT, color=CLOCK_COLOUR, text="")
-date_label = adafruit_display_text.label.Label(FONT, color=DATE_COLOUR, text="")
-count_label = adafruit_display_text.label.Label(FONT, color=COUNT_COLOUR, text="")
+clock_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
+date_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
+count_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
 # Centred time and date. Once a plane has been shown today, its count goes in the
 # top-right corner and the time and date move down a little to make room.
 # The outer rows/columns are left clear for the seconds ring.
@@ -660,9 +552,21 @@ CLOCK_Y=(10, 23)             # time, date with no count
 CLOCK_Y_WITH_COUNT=(15, 25)  # time, date with the count above
 count_label.y=5
 COUNT_RIGHT=display.width-2  # count's right edge, inside the ring
-temp_label = adafruit_display_text.label.Label(FONT, color=TEMP_COLOUR, text="")
+temp_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
 temp_label.x=2
 temp_label.y=5
+# Unit letter, used when the degree sign is drawn so it can sit 1 pixel after it
+unit_label = adafruit_display_text.label.Label(FONT, color=0x888888, text="")
+unit_label.y=5
+degree_bitmap=displayio.Bitmap(3, 3, 2)
+for _x, _y in ((1, 0), (0, 1), (2, 1), (1, 2)):
+    degree_bitmap[_x, _y]=1
+degree_palette=displayio.Palette(2)
+degree_palette[0]=0x000000
+degree_palette.make_transparent(0)
+degree_palette[1]=0x888888
+degree_tg=displayio.TileGrid(degree_bitmap, pixel_shader=degree_palette)
+degree_tg.hidden=True
 
 # Tiny plane icon (nose pointing right) shown beside the count
 ICON_ROWS=(
@@ -677,7 +581,7 @@ icon_bitmap=displayio.Bitmap(ICON_W, len(ICON_ROWS), 2)
 icon_palette=displayio.Palette(2)
 icon_palette[0]=0x000000
 icon_palette.make_transparent(0)
-icon_palette[1]=COUNT_COLOUR
+icon_palette[1]=0x888888
 for iy, row in enumerate(ICON_ROWS):
     for ix, ch in enumerate(row):
         if ch=="#":
@@ -694,9 +598,9 @@ ring_bitmap=displayio.Bitmap(RING_W, RING_H, 4)
 ring_palette=displayio.Palette(4)
 ring_palette[0]=0x000000
 ring_palette.make_transparent(0)
-ring_palette[1]=RING_COLOUR       # head
-ring_palette[2]=RING_FILL_COLOUR  # the part of the minute already gone
-ring_palette[3]=RING_FILL_COLOUR_2 if RING_FILL_COLOUR_2 is not None else RING_FILL_COLOUR
+ring_palette[1]=0xFFFFFF  # head
+ring_palette[2]=0x888888  # the part of the minute already gone
+ring_palette[3]=0x888888  # second stripe colour
 ring_tg=displayio.TileGrid(ring_bitmap, pixel_shader=ring_palette)
 ring_pos=-1
 
@@ -742,7 +646,100 @@ clock_group.append(date_label)
 clock_group.append(count_label)
 clock_group.append(icon_tg)
 clock_group.append(temp_label)
+clock_group.append(degree_tg)
+clock_group.append(unit_label)
 blank_group = displayio.Group()
+
+# ---- Particles: snow/confetti drifting down behind the idle clock ----
+# A full-screen 2-bit bitmap (512 bytes); each particle is one pixel kept off the edge rows/columns
+# so it doesn't touch the seconds ring.
+PARTICLE_STEP_NS=250000000  # move every 0.25s
+particle_bitmap=displayio.Bitmap(display.width, display.height, 4)
+particle_palette=displayio.Palette(4)
+particle_palette[0]=0x000000
+particle_palette.make_transparent(0)
+particle_tg=displayio.TileGrid(particle_bitmap, pixel_shader=particle_palette)
+particle_tg.hidden=True
+clock_group.insert(1, particle_tg)  # above the ring, behind the text
+particles=[]  # [x, y, colour index]
+last_particle_ns=0
+
+def setup_particles(config):
+    global particles
+    particle_bitmap.fill(0)
+    particles=[]
+    if not config:
+        return
+    colours=config["colours"][:3]
+    for i, c in enumerate(colours):
+        particle_palette[i+1]=c
+    for i in range(config["count"]):
+        particles.append([random.randint(1, display.width-2), random.randint(1, display.height-2), 1+i%len(colours)])
+
+def update_particles():
+    global last_particle_ns
+    now=time.monotonic_ns()
+    if now-last_particle_ns<PARTICLE_STEP_NS:
+        return
+    last_particle_ns=now
+    for p in particles:
+        particle_bitmap[p[0], p[1]]=0
+        p[1]+=1
+        p[0]=min(display.width-2, max(1, p[0]+random.choice((-1, 0, 0, 1))))  # drift
+        if p[1]>display.height-2:
+            p[0]=random.randint(1, display.width-2)
+            p[1]=1
+        particle_bitmap[p[0], p[1]]=p[2]
+
+def particles_active(night=False):
+    return bool(particles) and not night
+
+# ---- Applying a theme ----
+def apply_theme(name):
+    global theme_name, CLOCK_COLOUR, NIGHT_COLOUR, RING_STRIPE, accent_groups, accent_index, clock_shown_key, ring_pos
+    t=themes.THEMES[name]
+    label1.color=t["row1"]
+    label2.color=t["row2"]
+    label3.color=t["row3"]
+    planePalette[1]=t["plane"]
+    CLOCK_COLOUR=t["clock"]
+    NIGHT_COLOUR=t["night"]
+    date_label.color=t["date"]
+    count_label.color=t["count"]
+    icon_palette[1]=t["count"]
+    temp_label.color=t["temp"]
+    degree_palette[1]=t["temp"]
+    unit_label.color=t["temp"]
+    ring_palette[1]=t["ring"]
+    ring_palette[2]=t["ring_fill"]
+    ring_palette[3]=t["ring_fill_2"] if t["ring_fill_2"] is not None else t["ring_fill"]
+    RING_STRIPE=t["ring_stripe"]
+    ring_pos=-1  # redraw the ring in the new colours
+    # Decorations: drop the old theme's before building the new ones
+    g[0]=displayio.Group()
+    accent_groups=[]
+    gc.collect()
+    for accent in t["accent"]:
+        ag=make_accent_group(accent)
+        if ag is not None:
+            accent_groups.append(ag)
+    accent_index=-1
+    setup_particles(t["particles"])
+    clock_shown_key=None  # redraw the clock text
+    theme_name=name
+    gc.collect()
+    print("Theme:", name)
+
+# With THEME = "auto", switch theme when the date calls for it (needs the time)
+def check_auto_theme():
+    if THEME_SETTING!="auto":
+        return
+    lt=local_now()
+    if lt is None:
+        return
+    wanted=themes.auto_theme(lt[1], lt[2])
+    if wanted!=theme_name:
+        apply_theme(wanted)
 
 def set_centered(label, text):
     # Only touch the label when the text changes, to avoid needless allocations
@@ -769,7 +766,21 @@ def show_clock(night=False):
     if key!=clock_shown_key:
         clock_shown_key=key
         set_centered(clock_label, clock.format_time(lt[3], lt[4], CLOCK_24H))
-        temp_label.text=temp
+        if temp and not FONT_HAS_DEGREE:
+            # "46", then the drawn degree circle, then "F", each 1 pixel apart. Characters are
+            # 6 pixels wide with the last column blank, which gives the gap after the number.
+            number=str(temp_value)
+            temp_label.text=number
+            degree_tg.x=temp_label.x+len(number)*6
+            # level with the top of the digits (which start 2 rows into the font's 12-row cell)
+            degree_tg.y=temp_label.y+temp_label.bounding_box[1]+2
+            degree_tg.hidden=False
+            unit_label.text=TEMP_UNIT
+            unit_label.x=degree_tg.x+4
+        else:
+            temp_label.text=temp
+            degree_tg.hidden=True
+            unit_label.text=""
         if planes:
             count_label.text=str(planes)
             count_label.x=COUNT_RIGHT-count_label.bounding_box[2]
@@ -789,6 +800,9 @@ def show_clock(night=False):
                 clock_label.y, date_label.y=CLOCK_Y_WITH_COUNT
             else:
                 clock_label.y, date_label.y=CLOCK_Y
+    particle_tg.hidden=not particles_active(night)
+    if not particle_tg.hidden:
+        update_particles()
     ring_tg.hidden=not ring_active(night)
     if not ring_tg.hidden:
         update_ring()
@@ -818,7 +832,7 @@ def idle_wait(total_seconds, night=False):
         remaining=end-time.monotonic()
         if remaining<=0:
             break
-        step=0.1 if (SHOW_CLOCK and ring_active(night)) else 5
+        step=0.1 if (SHOW_CLOCK and (ring_active(night) or particles_active(night))) else 5
         time.sleep(min(step, remaining))
 
 
@@ -1129,9 +1143,12 @@ failed_flight=''
 failed_attempts=0
 consecutive_errors=0
 was_night=False
+# "auto" starts as classic until the first search tells us the date
+apply_theme("classic" if THEME_SETTING=="auto" else THEME_SETTING)
 while True:
 
     w.feed()
+    check_auto_theme()
 
     # Night mode: no flight lookups, just a dim clock or a dark display
     if in_night():
