@@ -27,6 +27,36 @@ I soldered a connection straight onto the panel's power port as below, for neatn
 ![IMG_2127_small](https://user-images.githubusercontent.com/103124527/206903089-16d0f7f7-2dc0-4082-a012-0e1c9999a63a.jpg)
 ![IMG_2128_small](https://user-images.githubusercontent.com/103124527/206903092-0a131b80-cd20-4c8c-b892-9b0a5c1d544b.jpg)
 
+## Case v4 (one-piece shell + back cover)
+
+An alternative enclosure in [`case/`](case/), remixed from the Thingiverse case above (CC-BY). It's a single-piece front shell that holds the diffuser behind a lip, plus a vented back cover that screws into the panel's own brass inserts, so nothing is taped and the panel can't shift. The MatrixPortal is mounted on the cover and connects to the panel with the ribbon cable, and USB comes in through a socket in the end of the case, so plugging and unplugging never strains the board. The case is 265.5 × 135.9 × 59.8 mm.
+
+![Back of the case](case/previews/view_back.png)
+
+**Print files** (the mesh units are millimetres):
+
+- FDM, PETG: `case/FlightPortal_v4_shell_FDM.stl` and `case/FlightPortal_v4_back_cover_FDM.stl`. Print the shell front face down and the cover outside face down. Neither needs supports. Use 4+ perimeters and 0.2 mm layers or finer. Infill can be 20%. PETG is better than PLA here because the snap clips flex and the panel gets warm.
+- MJF, PA12 nylon: `case/FlightPortal_v4_shell.stl` and `case/FlightPortal_v4_back_cover.stl`. These give a nicer finish, but cost a lot more.
+
+**Extra parts** (besides the MatrixPortal, panel, diffuser and the panel's ribbon and power cables):
+
+- [Adafruit 4218 panel-mount USB-C cable](https://www.adafruit.com/product/4218)
+- [Adafruit 400 extra-long male header](https://www.adafruit.com/product/400). Snap off two 8-pin strips and glue them side by side to make a 2x8 that joins the ribbon to the MatrixPortal's socket.
+- 5 × M3×8 pan head screws (cover to panel)
+- 7 × M3×10 countersunk screws (cover to shell)
+- 2 × nylon M3×8 screws (cover to the MatrixPortal's 5V/GND standoffs; use nylon because they carry power)
+- 2 small zip ties for the cable slack
+
+**Assembly:**
+
+1. Fit and tighten the USB-C socket in the empty shell.
+2. Drop in the diffuser, then the panel.
+3. On the cover, sit the power-cable lugs on the MatrixPortal's standoffs, press the board into the two clips, then fit the two nylon screws from outside.
+4. Connect the ribbon through the header. Plug the USB-C cable into the board and zip-tie the slack to the cover.
+5. Lower the cover on, then fit the 5 panel screws and the 7 cover screws. The panel screws sit deep in the standoffs, so use a long, slim screwdriver.
+
+The screws cut their own threads in the plastic, so stop once they're snug. To fit a different panel, header or printer, change the measurements at the top of `case/build_case.py` and run `python case/build_case.py case` (add `--fdm` for the FDM version). It needs `numpy`, `trimesh` and `manifold3d`.
+
 ## Setup
 
 1. Install CircuitPython on the MatrixPortal as described in https://learn.adafruit.com/adafruit-matrixportal-m4/install-circuitpython. It shows up as a `CIRCUITPY` drive when plugged in over USB.
