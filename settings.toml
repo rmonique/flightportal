@@ -28,7 +28,7 @@ DST_RULE = "EU"
 SHOW_CLOCK = "True"
 CLOCK_24H = "True"
 # The edge of the display fills up over each minute, like a second hand
-SECONDS_RING = "True"
+SECONDS_RING = "False"
 # Show how many planes have been shown today in the top-right corner
 SHOW_COUNT = "True"
 # Show the outside temperature in the top-left (from open-meteo.com, for the middle of BOUNDS_BOX)

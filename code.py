@@ -74,7 +74,7 @@ TEMP_UNIT="F" if str(os.getenv("TEMP_UNIT") or "C").strip().upper().startswith("
 # Set True if your display faces north, so east is on your left.
 FLIP_PLANE_DIRECTION=setting_bool("FLIP_PLANE_DIRECTION", False)
 # The edge of the display fills up over each minute on the idle clock
-SECONDS_RING=setting_bool("SECONDS_RING", True)
+SECONDS_RING=setting_bool("SECONDS_RING", False)
 # Night mode: between these local hours (0-23) don't look up flights. -1 = off.
 NIGHT_START=setting_int("NIGHT_START", -1)
 NIGHT_END=setting_int("NIGHT_END", -1)
