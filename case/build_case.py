@@ -23,7 +23,7 @@ PANEL_T   = float(ARGS[1]) if len(ARGS) > 1 else 15.0  # LED face -> back of fra
 PANEL_L, PANEL_H = 255.7, 127.7          # Adafruit 2278 drawing
 DIFF_L, DIFF_H, DIFF_T = 259.1, 129.5, 2.6  # Adafruit black diffusion acrylic
 DIFF_CLR  = 0.2                          # per side
-WALL      = 3.0
+WALL      = 4.0                          # 4 mm keeps ~3.1 mm through the rounded corners (3 mm left only 1.7)
 LIP_T     = 1.6                          # front face thickness
 LIP_OVER  = 0.5                          # window inset beyond panel edge, per side
 BEVEL     = 1.0                          # 45deg chamfer on window front edge
@@ -40,7 +40,7 @@ STACK_GAP = BSOCK_H + HDR_EXPOSED + IDC_H + RIBBON_BEND   # panel back -> Matrix
 COMP_H    = 4.0                          # tallest part on MatrixPortal top side
 TOP_CLR   = 2.5                          # also clears the extension's plug overmold
 COVER_T   = 2.5
-REBATE_W  = 1.5                          # cover sits in a rebate, outer skin stays 1.5 wide
+REBATE_W  = 2.0                          # cover sits in a rebate, outer skin stays 2.0 wide
 COVER_CLR = 0.3 if FDM else 0.2
 R_OUT     = 5.0                          # outer corner radius (front view)
 R_FRONT   = 2.0                          # front edge round-over
@@ -50,6 +50,12 @@ POST_FROM_HUB_EDGE, POST_SPACING = 5.08, 35.81
 LUG_T     = 0.8                          # power ring-lug thickness (sits on top of the board's standoff)
 BSTANDOFF_H = 3.0                        # MatrixPortal's own M3 power standoffs (measured)
 POST_H_MIN = 1.5                         # shortest cover pad that lands on each standoff
+# Power posts: short metal M3 pan head screws from outside the cover (metal, so they don't strip),
+# heads recessed below the surface so no live metal stands proud.
+PWR_SCREW_L, PWR_HEAD_H, PWR_HEAD_R = 6.0, 2.4, 2.8   # M3x6 pan head (ISO 7045: 5.6 mm head, 2.4 tall)
+PWR_HEAD_SINK = 0.5                      # head top this far below the cover's back face
+PWR_PAD_R = 5.0                          # pad radius (wide enough to surround the head recess)
+BOARD_INSET = 25.0                       # MatrixPortal's power/HUB75 edge -> +X end wall: room for the lugs and cables
 HOOK_U    = 12.0                         # snap hooks: distance from USB edge (fab-print u)
 HOOK_W, HOOK_T, HOOK_CATCH, HOOK_GAP = (6.0, 2.0, 0.6, 0.4) if FDM else (5.0, 1.2, 0.8, 0.4)
 PILOT_R = 1.4 if FDM else 1.3            # M3 thread-forming pilot radius (FDM holes print undersize)
@@ -57,6 +63,10 @@ CLEAR_R = 1.75 if FDM else 1.7           # M3 clearance radius
 
 # panel M3 brass inserts (from centre): 6 points, the one under the MatrixPortal is skipped
 PANEL_HOLES = [(-120, 56), (-120, -56), (0, 56), (0, -56), (120, 56)]
+# Long M3 screws go from the outside of the cover, down the standoff tubes, into the panel's inserts,
+# so the heads sit in a shallow recess any small screwdriver can reach.
+PANEL_SCREW_L = 40.0              # M3x40 pan or socket head
+PANEL_SCREW_ENGAGE = 5.0          # how far the screw goes into the panel past its back face
 
 # ---------------- derived ----------------
 IN_L, IN_H = DIFF_L + 2*DIFF_CLR, DIFF_H + 2*DIFF_CLR        # inner pocket 259.5 x 129.9
@@ -72,7 +82,7 @@ SOCK_Z_C = (Z_PB + Z_CI) / 2       # socket axis height
 
 # MatrixPortal placement: HUB75 edge 1 mm from the +X end wall, USB/button edge facing inward
 # (the extension cable's plug needs ~35 mm in front of the board's USB-C port).
-BX_USB = IN_L/2 - 1.0 - PCB_L      # X of USB/button edge
+BX_USB = IN_L/2 - BOARD_INSET - PCB_L   # X of USB/button edge
 BY_V0 = -IN_H/2 + (3.5 if FDM else 2.5) + PCB_W      # Y of the fab print's bottom edge (board is rotated 180deg);
                                    # 2.5 mm off the bottom wall leaves room for a snap hook
 def bxy(u, v):                     # fab-print coords (u from USB edge, v from bottom) -> X,Y
@@ -93,11 +103,20 @@ SOCK_BODY_D, SOCK_BODY_L = 20.0, 27.0
 # zip-tie anchors on the cover for the extension cable's slack
 TIE_ANCHORS = [(30.0, 0.0), (-30.0, 0.0)]
 
-# cover-to-shell screw bosses (hang off the walls)
-BOSS_R = 4.0
-BOSSES = [(-50, IN_H/2 - BOSS_R), (50, IN_H/2 - BOSS_R), (-50, -IN_H/2 + BOSS_R), (50, -IN_H/2 + BOSS_R),
+# cover-to-shell screws. The diffuser and panel go in from the back and fill the whole pocket, so
+# nothing may stick out of the shell's walls into it. Instead, blocks on the cover hang down inside
+# the walls, and M3x10 countersunk screws go in from outside, through the wall, into the blocks.
+BOSS_R = 4.0                       # half-width of a block along its wall
+BOSSES = [(-30, IN_H/2 - BOSS_R), (30, IN_H/2 - BOSS_R), (-30, -IN_H/2 + BOSS_R), (30, -IN_H/2 + BOSS_R),
           (-IN_L/2 + BOSS_R, 35), (-IN_L/2 + BOSS_R, -35), (IN_L/2 - BOSS_R, 35)]
-BOSS_DEPTH = 12.0
+BOSS_DEPTH = 12.0                  # block height, forward from the cover's inner face
+BLOCK_GAP = COVER_CLR              # block outer face -> wall inner face
+BLOCK_T = 2*BOSS_R - BLOCK_GAP     # block thickness, wall -> inward
+Z_SCREW = Z_CI - BOSS_DEPTH/2      # side-screw axis height
+# 90deg countersink, oversized so the head always ends up below the surface, never proud: sized for a
+# head up to 6.3 mm across, plus (FDM) holes printing up to 0.2 mm undersize and a sagging top edge.
+CSK_HEAD_MAX = 6.3
+CSK_R = CSK_HEAD_MAX/2 + (0.65 if FDM else 0.35)   # countersink radius at the wall surface
 
 # ---------------- helpers ----------------
 def rrect(l, h, r):
@@ -112,6 +131,23 @@ def box(x0, x1, y0, y1, z0, z1):
 
 def cyl(x, y, z0, z1, r, r2=None):
     return Manifold.cylinder(z1 - z0, r, r if r2 is None else r2).translate([x, y, z0])
+
+def wall_of(x, y):
+    """Which wall a block at (x, y) sits on: (axis, sign). axis 0 = end wall (X), 1 = top/bottom wall (Y)."""
+    if abs(abs(y) - (IN_H/2 - BOSS_R)) < 1e-6:
+        return 1, math.copysign(1, y)
+    return 0, math.copysign(1, x)
+
+def radial(x, y, z, s0, s1, r0, r1=None):
+    """Cylinder along the outward normal of the wall the block at (x, y) sits on.
+    s is measured outward from the wall's inner face (negative = into the pocket)."""
+    axis, sg = wall_of(x, y)
+    m = Manifold.cylinder(s1 - s0, r0, r0 if r1 is None else r1)      # along +Z from 0
+    if axis == 0:
+        m = m.rotate([0, 90*sg, 0])                                    # +Z -> sg*X
+        return m.translate([sg*(IN_L/2 + s0), y, z])
+    m = m.rotate([-90*sg, 0, 0])                                       # +Z -> sg*Y
+    return m.translate([x, sg*(IN_H/2 + s0), z])
 
 def slot_x(x, y, z0, z1, length, width):  # rounded slot along X, through Z
     cs = rrect(length, width, width/2 - 0.01).translate([x, y])
@@ -148,42 +184,13 @@ def shell():
     s -= Manifold.batch_hull([slab(rrect(wl + 2*BEVEL, wh + 2*BEVEL, 1.0 + BEVEL), -0.01, 0.0),
                               slab(rrect(wl, wh, 1.0), BEVEL, BEVEL + 0.01)])
     s -= slab(rrect(wl, wh, 1.0), -1, LIP_T + 1)
-    # crush ribs locating the panel (in the panel zone only, lead-in chamfer at the back)
-    gx = (IN_L - PANEL_L)/2 + 0.1     # rib height on end walls
-    gy = (IN_H - PANEL_H)/2 + 0.1     # rib height on top/bottom walls
-    z0, z1 = Z_PANEL + 0.3, Z_PB
-    ribs = []
-    for sx in (-1, 1):
-        for y in (-35, 35):
-            x_in, x_w = sx*IN_L/2, sx*(IN_L/2 + 0.5)
-            ribs.append(Manifold.hull(box(min(x_w, x_in - sx*gx), max(x_w, x_in - sx*gx), y - 1, y + 1, z0, z1 - 1.5)
-                                      + box(min(x_w, x_in), max(x_w, x_in), y - 1, y + 1, z0, z1 + 1.5)))
-    for sy in (-1, 1):
-        for x in (-90, 0, 90):
-            y_in, y_w = sy*IN_H/2, sy*(IN_H/2 + 0.5)
-            ribs.append(Manifold.hull(box(x - 1, x + 1, min(y_w, y_in - sy*gy), max(y_w, y_in - sy*gy), z0, z1 - 1.0)
-                                      + box(x - 1, x + 1, min(y_w, y_in), max(y_w, y_in), z0, z1 + 1.0)))
-    s += Manifold.batch_boolean(ribs, OpType.Add)
-    # cover screw bosses hanging off the walls (with a 45deg underside so nothing is a flat overhang)
+    # No crush ribs or bosses inside the pocket: the diffuser (which fills the pocket) and the panel
+    # must slide in from the back past everything. The cover's screws locate the panel instead.
+    # side-screw holes for the cover blocks: M3 clearance through the wall, 90deg countersink outside
     for (x, y) in BOSSES:
-        if abs(abs(y) - (IN_H/2 - BOSS_R)) < 1e-6:          # on top/bottom wall
-            wy = math.copysign(IN_H/2 + 0.5, y)
-            web = box(x - BOSS_R, x + BOSS_R, min(y, wy), max(y, wy), Z_CI - BOSS_DEPTH, Z_CI)
-        else:                                                # on an end wall
-            wx = math.copysign(IN_L/2 + 0.5, x)
-            web = box(min(x, wx), max(x, wx), y - BOSS_R, y + BOSS_R, Z_CI - BOSS_DEPTH, Z_CI)
-        b = cyl(x, y, Z_CI - BOSS_DEPTH, Z_CI, BOSS_R) + web
-        if FDM:   # 45deg gusset under the boss so it prints without support (shell prints front-face down)
-            zb = Z_CI - BOSS_DEPTH
-            if abs(abs(y) - (IN_H/2 - BOSS_R)) < 1e-6:
-                wy = math.copysign(IN_H/2 + 0.5, y); wy0 = math.copysign(IN_H/2 - 0.01, y)
-                strip = box(x - BOSS_R, x + BOSS_R, min(wy0, wy), max(wy0, wy), zb - 2*BOSS_R, zb - 2*BOSS_R + 0.01)
-            else:
-                wx = math.copysign(IN_L/2 + 0.5, x); wx0 = math.copysign(IN_L/2 - 0.01, x)
-                strip = box(min(wx0, wx), max(wx0, wx), y - BOSS_R, y + BOSS_R, zb - 2*BOSS_R, zb - 2*BOSS_R + 0.01)
-            b += Manifold.hull(b.trim_by_plane([0, 0, -1], -(zb + 0.01)) + strip)
-        s += b
-        s -= cyl(x, y, Z_CI - 10, Z_CI + 1, PILOT_R)        # M3 thread-forming pilot
+        s -= radial(x, y, Z_SCREW, -1, WALL + 1, CLEAR_R)
+        s -= radial(x, y, Z_SCREW, WALL - (CSK_R - 1.6), WALL + 0.01, 1.6, CSK_R)
+        s -= radial(x, y, Z_SCREW, WALL, WALL + 1, CSK_R)
     # +X end wall: round hole for the panel-mount USB-C socket
     r = SOCK_HOLE_D/2
     cs = CrossSection.circle(r)
@@ -201,20 +208,25 @@ def shell():
 def cover():
     cl, ch = OUT_L - 2*REBATE_W - 2*COVER_CLR, OUT_H - 2*REBATE_W - 2*COVER_CLR
     c = slab(rrect(cl, ch, R_OUT - REBATE_W - COVER_CLR), Z_CI, Z_END)
-    # panel standoffs: tubes with a 3 mm floor at the tip, M3x8 from the back into the brass inserts
+    # panel standoffs: tubes pressing on the panel back, long M3 screws from outside into the brass inserts
     tip = Z_PB - PRESS
+    z_head = Z_PB - PANEL_SCREW_ENGAGE + PANEL_SCREW_L      # underside of the screw head
+    assert Z_END - 12 < z_head < Z_END - 1, f"PANEL_SCREW_L doesn't suit this depth: head seat at {z_head:.1f}"
     for (x, y) in PANEL_HOLES:
         c += cyl(x, y, tip, Z_CI + 0.01, 5.0)
     for (x, y) in PANEL_HOLES:
-        c -= cyl(x, y, tip + 3.0, Z_END + 1, 3.5)            # screwdriver/head bore
+        c -= cyl(x, y, z_head, Z_END + 1, 3.5)              # shallow head recess
         c -= cyl(x, y, tip - 1, Z_END + 1, CLEAR_R)          # M3 clearance
     # MatrixPortal, HUB75 end: pads land on the board's own threaded standoffs (power lug between);
-    # M3 screw from outside the cover into the standoff. Use nylon screws: the standoffs carry 5V/GND.
+    # metal M3 pan head screw from outside the cover into the standoff, head recessed below the surface.
     ptip = Z_BTOP + BSTANDOFF_H + LUG_T                     # pad length follows the standoff height
+    z_seat = Z_END - PWR_HEAD_SINK - PWR_HEAD_H             # underside of the screw head
+    reach = PWR_SCREW_L - (z_seat - ptip) - LUG_T           # how far the screw goes into the standoff
+    assert 1.5 <= reach <= BSTANDOFF_H - 0.1, f"power screw reach {reach:.1f} mm doesn't suit the standoff"
     for (x, y) in POSTS:
-        c += cyl(x, y, ptip, Z_CI + 0.01, 3.5)
+        c += cyl(x, y, ptip, Z_CI + 0.01, PWR_PAD_R)
         c -= cyl(x, y, ptip - 1, Z_END + 1, CLEAR_R)         # M3 clearance
-        c -= cyl(x, y, Z_END - 1.0, Z_END + 1, 3.3)          # shallow head recess
+        c -= cyl(x, y, z_seat, Z_END + 1, PWR_HEAD_R + 0.5)  # head recess
     # MatrixPortal, USB end: two snap hooks catch the long edges from underneath
     hx = BX_USB + HOOK_U
     zc = Z_BOARD - HOOK_GAP                                  # catch face (board underside rests here)
@@ -231,15 +243,17 @@ def cover():
         tip = edge_y - sgn*HOOK_CATCH
         c += Manifold.hull(box(hx - HOOK_W/2, hx + HOOK_W/2, min(y_in, tip), max(y_in, tip), zc - 0.4, zc)
                            + box(hx - HOOK_W/2, hx + HOOK_W/2, min(y_in, y_in + 0.01*sgn), max(y_in, y_in + 0.01*sgn), zc - 1.6, zc))
-    # countersunk M3 holes for the shell bosses
+    # screw blocks hanging down inside the shell walls, with a pilot for the side screw
     for (x, y) in BOSSES:
-        c -= cyl(x, y, Z_CI - 1, Z_END + 1, CLEAR_R)
-        c -= cyl(x, y, Z_END - 1.7, Z_END + 0.01, 1.6, 3.3)
-    # window over the MatrixPortal's button edge + status LEDs: extends 7 mm past the board edge so
-    # the side-facing buttons can be seen and pressed with a toothpick
-    xa, xb = BX_USB - 7, bxy(24, 0)[0]
-    ya, yb = BTN_Y[-1] - 4, BTN_Y[0] + 4
-    c -= slab(rrect(xb - xa, yb - ya, 2.0).translate([(xa + xb)/2, (ya + yb)/2]), Z_CI - 1, Z_END + 1)
+        axis, sg = wall_of(x, y)
+        a, b = sg*(-BLOCK_GAP - BLOCK_T), sg*(-BLOCK_GAP)              # offsets from the inner wall face
+        if axis == 0:
+            w = sg*IN_L/2
+            c += box(min(w + a, w + b), max(w + a, w + b), y - BOSS_R, y + BOSS_R, Z_CI - BOSS_DEPTH, Z_CI + 0.01)
+        else:
+            w = sg*IN_H/2
+            c += box(x - BOSS_R, x + BOSS_R, min(w + a, w + b), max(w + a, w + b), Z_CI - BOSS_DEPTH, Z_CI + 0.01)
+        c -= radial(x, y, Z_SCREW, -BLOCK_GAP - BLOCK_T - 1, 0.5, PILOT_R)
     # zip-tie anchors (bridge with a 4 x 2 mm tunnel along Y)
     for (x, y) in TIE_ANCHORS:
         c += box(x - 5, x + 5, y - 4, y + 4, Z_CI - 4.5, Z_CI + 0.01)
@@ -281,6 +295,13 @@ if __name__ == "__main__":
     print("variant:", "FDM" if FDM else "MJF")
     print(f"panel T={PANEL_T}  outer {OUT_L:.1f} x {OUT_H:.1f} x {Z_END:.1f} mm")
     print(f"ribbon stack: socket {BSOCK_H} + header {HDR_EXPOSED:.1f} + IDC {IDC_H} + bend {RIBBON_BEND} = {STACK_GAP:.1f} mm")
+    print(f"panel screws: M3x{PANEL_SCREW_L:g}, head recess {Z_END - (Z_PB - PANEL_SCREW_ENGAGE + PANEL_SCREW_L):.1f} mm deep, "
+          f"{PANEL_SCREW_ENGAGE:g} mm into the panel")
+    print(f"side-screw countersinks: {2*CSK_R:.1f} mm across, {CSK_R - 1.6:.2f} mm deep, "
+          f"{WALL - (CSK_R - 1.6):.2f} mm of plain wall under them; a 6.0 mm head sits {CSK_R - 3.0:.2f} mm below the surface")
+    print(f"power screws: M3x{PWR_SCREW_L:g} pan head, {Z_END - PWR_HEAD_SINK - PWR_HEAD_H - (Z_BTOP + BSTANDOFF_H + LUG_T):.1f} mm of pad under the head, "
+          f"{PWR_SCREW_L - (Z_END - PWR_HEAD_SINK - PWR_HEAD_H - (Z_BTOP + BSTANDOFF_H + LUG_T)) - LUG_T:.1f} mm into the standoff; "
+          f"board X {BX_USB:.1f} to {BX_USB + PCB_L:.1f}, {BOARD_INSET:g} mm from the end wall")
     print(f"Z: diffuser {Z_DIFF}-{Z_PANEL}, panel back {Z_PB:.1f}, board {Z_BOARD:.1f}, cover {Z_CI:.1f}-{Z_END:.1f}")
     for n, t in (("shell", t1), ("cover", t2)):
         print(f"{n}: watertight={t.is_watertight} bodies={len(t.split(only_watertight=False))} "

@@ -29,7 +29,7 @@ I soldered a connection straight onto the panel's power port as below, for neatn
 
 ## Case v4 (one-piece shell + back cover)
 
-An alternative enclosure in [`case/`](case/), remixed from the Thingiverse case above (CC-BY). It's a single-piece front shell that holds the diffuser behind a lip, plus a vented back cover that screws into the panel's own brass inserts, so nothing is taped and the panel can't shift. The MatrixPortal is mounted on the cover and connects to the panel with the ribbon cable, and USB comes in through a socket in the end of the case, so plugging and unplugging never strains the board. The case is 265.5 × 135.9 × 59.8 mm.
+An alternative enclosure in [`case/`](case/), remixed from the Thingiverse case above (CC-BY). It's a single-piece front shell that holds the diffuser behind a lip, plus a vented back cover that screws into the panel's own brass inserts, so nothing is taped and the panel can't shift. Nothing sticks into the shell's pocket, so the diffuser and panel drop straight in from the back. The MatrixPortal is mounted on the cover and connects to the panel with the ribbon cable, and USB comes in through a socket in the end of the case, so plugging and unplugging never strains the board. The case is 267.5 × 137.9 × 59.8 mm, with 4 mm walls so the corners stand up to knocks.
 
 ![Back of the case](case/previews/view_back.png)
 
@@ -42,20 +42,21 @@ An alternative enclosure in [`case/`](case/), remixed from the Thingiverse case 
 
 - [Adafruit 4218 panel-mount USB-C cable](https://www.adafruit.com/product/4218)
 - [Adafruit 400 extra-long male header](https://www.adafruit.com/product/400). Snap off two 8-pin strips and glue them side by side to make a 2x8 that joins the ribbon to the MatrixPortal's socket.
-- 5 × M3×8 pan head screws (cover to panel)
-- 7 × M3×10 countersunk screws (cover to shell)
-- 2 × nylon M3×8 screws (cover to the MatrixPortal's 5V/GND standoffs; use nylon because they carry power)
+- 5 × M3×40 pan head or socket head screws (through the cover's standoffs into the panel)
+- 7 × M3×10 metric countersunk screws (90° heads, not US 82° flat heads; through the shell's side walls into blocks on the cover)
+- 2 × metal M3×6 pan head screws (cover to the MatrixPortal's 5V/GND standoffs; the heads sit below the cover's surface, so no live metal stands proud)
 - 2 small zip ties for the cable slack
 
 **Assembly:**
 
-1. Fit and tighten the USB-C socket in the empty shell.
-2. Drop in the diffuser, then the panel.
-3. On the cover, sit the power-cable lugs on the MatrixPortal's standoffs, press the board into the two clips, then fit the two nylon screws from outside.
+1. Lay the shell front face down and drop in the diffuser, then the panel.
+2. Fit the USB-C socket through the end wall and tighten its nut on the inside, in the space behind the panel. Do this after the panel, because the socket's body sticks into the pocket.
+3. On the cover, sit the power-cable lugs on the MatrixPortal's standoffs with their wires pointing off the end of the board, toward the end wall. Press the board into the two clips, then fit the two M3×6 screws from outside, through the lugs into the standoffs.
 4. Connect the ribbon through the header. Plug the USB-C cable into the board and zip-tie the slack to the cover.
-5. Lower the cover on, then fit the 5 panel screws and the 7 cover screws. The panel screws sit deep in the standoffs, so use a long, slim screwdriver.
+5. Lower the cover on, so its 7 screw blocks slide down inside the shell walls. Fit the 5 long panel screws from the outside of the cover, down the standoffs into the panel. Their heads sit in shallow recesses, so any small screwdriver reaches them.
+6. Fit the 7 countersunk screws from outside, through the holes in the shell's top, bottom and end walls into the blocks.
 
-The screws cut their own threads in the plastic, so stop once they're snug. To fit a different panel, header or printer, change the measurements at the top of `case/build_case.py` and run `python case/build_case.py case` (add `--fdm` for the FDM version). It needs `numpy`, `trimesh` and `manifold3d`.
+The 7 side screws cut their own threads in the plastic, so stop once they're snug. To fit a different panel, header or printer, change the measurements at the top of `case/build_case.py` and run `python case/build_case.py case` (add `--fdm` for the FDM version). It needs `numpy`, `trimesh` and `manifold3d`.
 
 ## Setup
 
